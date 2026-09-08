@@ -1,0 +1,61 @@
+{% extends "main/base.html" %}
+{% block content %}
+
+<style>
+    body {
+        background-image: url("{{ url_for('static', filename='images/shelter_bg.jpg') }}") !important;
+        background-size: cover !important;
+        background-position: center !important;
+        background-repeat: no-repeat !important;
+        background-attachment: fixed !important; /* 스크롤 시 배경 고정 */
+        margin: 0 !important;
+        padding: 0 !important;
+        min-height: 100vh !important;
+    }
+
+    /* base.html의 레이아웃이 배경을 가리지 않도록 투명화 및 조절 */
+    .container, .wrapper, #content {
+        background: transparent !important;
+        max-width: 100% !important;
+        width: 100% !important;
+    }
+</style>
+
+{% if current_user.is_authenticated %}
+<div style="display: flex !important; 
+            flex-direction: row !important; 
+            justify-content: center !important; 
+            align-items: flex-start !important;
+            gap: 60px !important;
+            padding: 60px 0 !important; 
+            width: 100% !important; 
+            max-width: 1200px !important;
+            padding-top: 200px !important;  
+            margin: 0 auto !important;
+            box-sizing: border-box !important;
+            background: transparent !important; /* 부모 컨테이너 투명화 */">
+
+    <div style="display: flex !important; flex-direction: column !important; gap: 40px !important;">
+        
+        <a href="{{ url_for('stream.index') }}" class="menu-card" style="height: 400px !important; width: 300px !important;">
+            <div class="card-title" style="font-size: 23px !important;">실시간 관제</div>
+        </a>
+    </div>
+
+    <div style="display: flex !important; flex-direction: column !important; gap: 55px !important;">
+        
+        <a href="{{ url_for('detect_data.animal_db') }}" class="menu-card" style="height: 100px !important; width: 430px !important; justify-content: center !important;">
+            <div class="card-title" style="font-size: 20px !important;">유기동물 관리</div>
+        </a>
+        <a href="{{ url_for('detect_data.detect_animal') }}" class="menu-card" style="height: 100px !important; width: 430px !important; justify-content: center !important;">
+            <div class="card-title" style="font-size: 20px !important;">영상 감지 내역</div>
+        </a>
+        <a href="{{ url_for('detect_data.danger_db') }}" class="menu-card" style="height: 100px !important; width: 430px !important; justify-content: center !important;">
+            <div class="card-title" style="font-size: 20px !important;">이상객체 관리</div>
+        </a>
+    </div>
+
+</div>
+{% endif %}
+
+{% endblock %}

@@ -1,0 +1,95 @@
+{% extends "main/base.html" %}
+{% block title %}보호소 감지 내역{% endblock %}
+
+{% block content %}
+<div class="w-100 text-start"style="!important;">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <h2 class="fw-bold text-dark m-0 fs-3">
+            <i class="fa-solid fa-users-gear text-secondary me-2"> 보호소 감지 내역</i>
+        </h2>
+        <div class="d-flex flex-column align-items-end gap-2">
+            <div class="d-flex flex-row gap-2">
+                <a href="{{ url_for('stream.index') }}" 
+                class="btn btn-dark px-3 fw-semibold rounded-pill shadow-sm" 
+                style="background-color: #4A3525; border: none; height: 60px; display: inline-flex; align-items: center; justify-content: center; font-size: 16px; min-width: 140px; white-space: nowrap;">
+                    영상 감지 화면
+                <a href="{{ url_for('control_page.index') }}" 
+                   class="btn btn-dark px-3 fw-semibold rounded-pill shadow-sm" 
+                   style="background-color: #4A3525; border: none; height: 60Spx; display: inline-flex; align-items: center; justify-content: center; font-size: 16px; min-width: 110px;">
+                    메뉴 화면
+                </a>
+                <a href="{{ url_for('detect_data.download_excel', table_name='detect_animal') }}"
+                class="btn btn-dark px-3 fw-semibold rounded-pill shadow-sm" 
+                style="background-color: #4A3525; border: none; height: 60px; display: inline-flex; align-items: center; justify-content: center; font-size: 16px; min-width: 110px; white-space: nowrap;">
+                    엑셀로 다운로드
+                </a>
+                <form action="{{ url_for('detect_data.delete_all_detect_animals') }}" 
+                method="POST" 
+                onsubmit="return confirm('⚠️ 경고: 저장된 모든 감지 내역이 영구 삭제됩니다. 정말 진행하시겠습니까?');"
+                class="d-inline m-0">
+                
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+
+                <button type="submit" class="btn btn-dark px-4 fw-bold rounded-pill shadow-sm" 
+                        style="background-color: #4A3525; border: none; height: 60px; display: inline-flex; align-items: center; justify-content: center; font-size: 16px; min-width: 140px; color: #FF4D4D !important; white-space: nowrap;">
+                    <i class="fa-solid fa-trash-can me-2"></i>전체 삭제
+                </button>
+                </form>
+            </div>
+            <div class="d-flex flex-row align-items-center gap-2"></div>
+                <form method="GET" action="{{ url_for('detect_data.detect_animal') }}" class="d-flex gap-1 m-0">
+                    <input type="text" name="keyword" class="form-control" placeholder="검색어 또는 날짜(2026-06-11)" value="{{ request.args.get('keyword', '') }}" style="height: 50px; width: 250px;">
+                    <button type="submit" class="btn btn-primary" style="height: 50px; width: 60px;">검색</button>
+                    <a href="{{ url_for('detect_data.detect_animal') }}" class="btn btn-secondary" style="height: 50px; display: flex; align-items: center;">초기화</a>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- 버튼과 테이블 박스 사이의 투명 여백 공간 (30px로 최적화) -->
+    <div style="height: 30px; width: 100%; clear: both;"></div>
+
+    <!-- 테이블 시작 박스 -->
+    <div class="bg-white p-4 rounded-4 shadow-sm" style="border: 3px solid #ebeaea !important;">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="border-top-0" style="background-color: #4A3525 !important;">
+                    <tr class="fw-semibold align-middle" style="font-size: 15px; height: 50px; color: #f02222 !important;">
+                        <th scope="col" class="py-3 ps-3" style="vertical-align: middle !important; background-color: #b19682 !important;">ID</th>
+                        <th scope="col" class="py-3" style="vertical-align: middle !important; background-color: #b19682 !important;">감지된 동물</th>
+                        <th scope="col" class="py-3" style="vertical-align: middle !important; background-color: #b19682 !important;">감지된 마리수</th>
+                        <th scope="col" class="py-3" style="vertical-align: middle !important; background-color: #b19682 !important;">감지 일시</th>
+                        <th scope="col" class="py-3" style="vertical-align: middle !important; background-color: #b19682 !important;">알람 발송 여부</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in detect_animals %}
+                    <tr style="transition: background-color 0.2s ease;">
+                        <td class="py-3 ps-3 fw-bold text-secondary">#{{ item.detect_id }}</td>
+                        <td class="fw-semibold text-dark">{{ item.detect_type_count if item.detect_type_count else '-' }}</td>
+                        <td class="fw-bold text-primary">{{ item.detect_animal_count }}마리</td>
+                        <td class="text-muted">
+                            {{ item.detect_day.strftime('%Y-%m-%d %H:%M:%S') if item.detect_day else '-' }}
+                        </td>
+                        <td>
+                            {% if item.detect_alarm %}
+                            <span class="badge bg-danger-subtle text-danger border border-danger-subtle px-2.5 py-1.5 rounded-3">발송 완료</span>
+                            {% else %}
+                            <span class="badge bg-light text-secondary border px-2.5 py-1.5 rounded-3">미발송</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="5" class="text-center py-5 text-muted">
+                            <i class="fa-solid fa-folder-open d-block mb-2 fs-4 opacity-50"></i>
+                            현재 기록된 감지 데이터가 없습니다.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div> 
+{% endblock %}

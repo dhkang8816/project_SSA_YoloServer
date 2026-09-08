@@ -1,0 +1,233 @@
+{% extends "main/base.html" %}
+{% block title %}영상 관제{% endblock %}
+
+{% block content %}
+<head>
+    <link href="{{ url_for('static', filename='vendor/fontawesome-free/css/all.min.css') }}" rel="stylesheet" type="text/css">
+    <link href="https://fonts.googleapis.com/css?family=Nunito:200,200i,300,300i,400,400i,600,600i,700,700i,800,800i,900,900i" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/sb-admin-2.min.css') }}" rel="stylesheet">
+
+    <meta charset="UTF-8">
+    <title>YOLOv12 Live Streaming</title>
+    <style>
+        /* 스크롤바 및 실시간 관제 레이아웃 최적화 스타일 */
+        .dashboard-container {
+            max-width: 95%; /* 850px 제한 제거, 화면의 95% 사용 */
+            margin: 0 auto; 
+            padding: 10px;
+        }
+
+        .content-wrapper {
+            display: flex; 
+            gap: 20px; 
+            align-items: flex-start;
+        }
+
+        .alert-box {
+            background-color: #ffffff;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 20px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+            text-align: left;
+        }
+        .alert-header {
+            font-size: 18px;
+            font-weight: bold;
+            color: #d9383a;
+            border-bottom: 2px solid #f6e9e4;
+            padding-bottom: 8px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .log-viewport {
+            max-height: 250px;
+            overflow-y: auto;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            background: #fafafa;
+            padding: 5px;
+        }
+        .log-item {
+            padding: 8px 12px;
+            border-bottom: 1px solid #eeeeee;
+            font-family: monospace;
+            font-size: 13px;
+            animation: fadeIn 0.3s ease-out;
+        }
+        .video-src-btn {
+            padding: 8px 16px;
+            background-color: #4A5568;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .video-src-btn:hover {
+            background-color: #2D3748;
+        }
+        .active-src {
+            background-color: #E53E3E !important; /* 현재 선택된 파일은 빨간색으로 시각화 */
+            outline: 2px solid #ffffff;
+        }
+        .log-item:last-child { border-bottom: none; }
+        .badge-danger { background-color: #ff4d4f; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold; }
+        .badge-warning { background-color: #faad14; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+    <script>
+        // 프론트 메모리 과부하 방지를 위한 고유 타임스탬프 캐시 세트
+        const processedAlerts = new Set();
+        
+        setInterval(() => {
+            fetch('/stream/sync_dangers')
+                .then(res => res.json())
+                .then(data => {
+                    const logViewport = document.getElementById("logViewport");
+                    
+                    // 현재 날짜 및 시간을 보호동물 DB 형식과 동일하게 직접 조립 (연-월-일 시:분:초)
+                    const now = new Date();
+                    const nowStr = now.getFullYear() + '-' + 
+                                   String(now.getMonth() + 1).padStart(2, '0') + '-' + 
+                                   String(now.getDate()).padStart(2, '0') + ' ' + 
+                                   String(now.getHours()).padStart(2, '0') + ':' + 
+                                   String(now.getMinutes()).padStart(2, '0') + ':' + 
+                                   String(now.getSeconds()).padStart(2, '0');
+                    
+                    // 1) 위험 객체 자동 동기화 발생 시 실시간 타임라인에 즉시 로깅
+                    if (data.synced_count > 0) {
+                        console.log("위험 객체 " + data.synced_count + "건 자동 동기화 완료");
+                        const item = document.createElement("div");
+                        item.className = "log-item";
+                        
+                        item.innerHTML = `<span class="badge-danger">⚠ 위험 객체</span> 
+                        [${nowStr}] <b>위험 이상객체</b> 상태 감지 - <b>${data.synced_count}</b>`;
+                        logViewport.insertBefore(item, logViewport.firstChild);
+                    }
+                    
+                    // 2) 동물 미달/이상 경보 동적 렌더링 표출 활성화 (중요!)
+                    if (data.animal_alerts && data.animal_alerts.length > 0) {
+                        data.animal_alerts.reverse().forEach(alert => {
+                            const uniqueKey = alert.type + "_" + alert.time;
+                             
+                            if (!processedAlerts.has(uniqueKey)) {
+                                processedAlerts.add(uniqueKey);
+                                 
+                                const item = document.createElement("div");
+                                item.className = "log-item";
+                                 
+                                // 조건부 배지 할당 (미달이면 빨간색 danger, 그 외에는 노란색 warning)
+                                const badgeClass = alert.type.includes("미달") ? "badge-danger" : "badge-warning";
+                                 
+                                item.innerHTML = `<span class="${badgeClass}">⚠ 개체수 알림</span> 
+                                [${alert.time}] <b>${alert.type}</b> 상태 감지 - 현재 잔류 수량: <b>${alert.count}마리</b>`;
+                                 
+                                logViewport.insertBefore(item, logViewport.firstChild);
+                            }
+                        });
+                    }
+                    
+                    // 3) DOM 최적화 (로그가 20개를 초과하면 가장 오래된 하단 로그 자동 삭제)
+                    while (logViewport.children.length > 20) {
+                        logViewport.removeChild(logViewport.lastChild);
+                    }
+                })
+                .catch(err => console.error("관제 데이터 동기화 실패:", err));
+        }, 3000); // 3초 간격 호출
+
+        function serverSideVideoChange(videoKey) {
+            const cleanKey = videoKey.trim();
+            
+            // 💡 블루프린트 라우터 주소 규칙(/stream/change_source)으로 정확히 노크합니다.
+            fetch(`/stream/change_source/${cleanKey}`, {
+                method: 'POST'
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.status === "success") {
+                    console.log("서버 소스 전환 성공!");
+                    
+                    // 버튼 활성화 빨간색 스타일 토글
+                    document.querySelectorAll('.video-src-btn').forEach(btn => {
+                        btn.classList.remove('active-src');
+                    });
+                    event.target.classList.add('active-src');
+                } else {
+                    alert("전환 실패: " + data.message);
+                }
+            })
+            .catch(err => console.error("서버 통신 실패:", err));
+        }
+    </script>
+</head>
+<body style="text-align: center; background-color: #f6e9e4; color: black; font-family: sans-serif;">
+    <div class="dashboard-container">
+        <div class="d-flex flex-column align-items-end gap-2">
+            <div class="d-flex flex-row gap-2">
+            </div>
+        <div style="display: flex; justify-content: center; gap: 12px; margin-bottom: 20px;">
+            <!-- 버튼 클릭 시 자바스크립트 대신 Flask 라우터 주소로 직접 이동하여 화면을 리프레시합니다 -->
+            <a href="/stream/change_source/video_1" class="video-src-btn">🎬 1번 카메라</a>
+            <a href="/stream/change_source/video_2" class="video-src-btn">🎬 2번 카메라</a>
+            <a href="/stream/change_source/video_3" class="video-src-btn">🎬 3번 카메라</a>
+            <a href="{{ url_for('esp32_yolov12.index') }}" class="video-src-btn">🚁 esp32 cam</a>
+        </div>
+    </div>
+
+
+    <div class="content-wrapper">
+        
+        <div style="flex: 0 0 220px;">
+            <div class="card bg-primary text-white mb-4">
+                <div class="card-body" style="padding: 1rem;">보호 중인 유기동물</div>
+                <div class="card-footer d-flex align-items-center justify-content-between">
+                    <div style="font-size: 1.5rem; font-weight: bold;">{{ animal_count }} 마리</div>
+                    <a class="small text-white stretched-link" href="{{ url_for('detect_data.animal_db') }}">관리 ></a>
+                </div>
+            </div>
+            
+            <div class="card bg-danger text-white mb-4">
+                <div class="card-body" style="padding: 1rem;">야생동물 출몰 횟수</div>
+                <div class="card-footer d-flex align-items-center justify-content-between">
+                    <div style="font-size: 1.5rem; font-weight: bold;">{{ danger_detect }} 회</div>
+                    <a class="small text-white stretched-link" href="{{ url_for('detect_data.danger_db') }}">내역 확인 ></a>
+                </div>
+            </div>
+            <div class="card bg-warning text-white mb-4">
+                <div class="card-body" style="padding: 1rem;">유기동물 감지 내역</div>
+                <div class="card-footer d-flex align-items-center justify-content-between">
+                    <div style="font-size: 1.5rem; font-weight: bold;">{{ animal_detect }} 회</div>
+                    <a class="small text-white stretched-link" href="{{ url_for('detect_data.detect_animal') }}">내역 확인 ></a>
+                </div>
+            </div>
+            <div class="card bg-success text-white mb-4">
+                <div class="card-footer d-flex align-items-center justify-content-between">
+                    <a class="small text-white stretched-link" href="{{ url_for('control_page.index') }}">메뉴 화면 ></a>
+                </div>
+            </div>
+        </div>
+
+        <div class="alert-box" style="flex: 1; margin-top: 0;">
+            <div class="alert-header">
+                <span>실시간 통합 관제 영상</span>
+            </div>
+            
+            <div style="padding: 10px; text-align: center; flex: 1;">
+                <img src="{{ url_for('stream.video_feed') }}" 
+                    style="width: 100%; height: 480px; object-fit: cover; border: 2px solid #f6e9e4; border-radius: 6px; box-shadow: 0 4px 10px rgba(0,0,0,0.1);"/>
+            </div>
+
+            <div class="alert-header" style="border-top: 2px solid #f6e9e4; margin-top: 10px;">
+                <span>실시간 통합 관제 시스템 경보 로그</span>
+            </div>
+            <div class="log-viewport" id="logViewport" style="height: 250px; overflow-y: auto;">
+                <div class="log-item" style="color: #888; text-align: center;">실시간 경보를 대기 중입니다...</div>
+            </div>
+        </div>
+    </div>
+</body>
+{% endblock %}

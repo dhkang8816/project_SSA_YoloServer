@@ -1,0 +1,158 @@
+{% extends "crud/base.html" %}
+{% block title %}사용자 편집{% endblock %}
+
+{% block content %}
+<!-- 스타일 정의 구역 -->
+<style>
+    /* 전체 콘텐츠를 화면 정중앙(상하좌우)에 배치하는 컨테이너 */
+    .edit-container {
+        max-width: 500px;
+        min-height: 80vh;
+        margin: 0 auto;
+        padding: 0 20px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+    }
+
+    /* 폼 전체를 감싸는 세련된 하얀색 카드 박스 스타일 */
+    .edit-card {
+        width: 100%;
+        background-color: #ffffff;
+        border-radius: 8px;
+        padding: 30px;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08);
+        text-align: left;
+    }
+
+    .edit-card h2 {
+        margin-top: 0;
+        margin-bottom: 25px;
+        font-size: 24px;
+        color: #333;
+        font-weight: bold;
+        text-align: center;
+        border-bottom: 2px solid #f6e9e4;
+        padding-bottom: 12px;
+    }
+
+    /* 입력 폼 그룹 간격 조절 */
+    .form-group {
+        margin-bottom: 20px;
+    }
+
+    .form-group label {
+        display: block;
+        margin-bottom: 8px;
+        font-weight: bold;
+        color: #555;
+        font-size: 14px;
+    }
+
+    /* 질문자님의 컴포넌트 공통 스타일 (가로폭을 카드에 맞춰 100% 확장하여 통일감 부여) */
+    select, input[type="text"], input[type="email"], input[type="password"] {
+        width: 100%;              
+        padding: 10px 12px;         
+        font-size: 14px;           
+        border: 1px solid #87caf7; 
+        border-radius: 4px;        
+        box-sizing: border-box;    
+        outline: none;             
+        transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    /* 선택(Focus)했을 때 은은한 파란색 테두리 효과 */
+    select:focus, input:focus {
+        border-color: #3b82f6;
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+    }
+
+    /* 하단 버튼 정렬 컨테이너 */
+    .btn-container {
+        display: flex;
+        justify-content: center;
+        gap: 10px;
+        margin-top: 30px;
+    }
+
+    /* 버튼 공통 스타일 및 질문자님 지정 색상 맵핑 */
+    .btn-custom {
+        padding: 10px 20px;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        font-weight: bold;
+        font-size: 14px;
+        cursor: pointer;
+        text-decoration: none;
+        display: inline-block;
+        text-align: center;
+        transition: opacity 0.2s;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .btn-custom:hover {
+        opacity: 0.9;
+    }
+    .btn-blue { background-color: #2563eb; }
+    .btn-green { background-color: #16a34a; }
+    .btn-red { background-color: #dc2626; }
+</style>
+
+<div class="edit-container">
+    <div class="edit-card">
+        <h2>사용자 정보 수정</h2>
+        
+        <!-- 단일화된 정석 Form 태그 구성 -->
+        <form action="{{ url_for('crud.edit_user', user_id=user.id) }}" method="POST" novalidate="novalidate">
+            {{ form.csrf_token if form.csrf_token else '' }}
+
+            <!-- 1) 권한 설정 구역 -->
+            <div class="form-group">
+                <label for="role">권한 설정</label>
+                <select name="role" id="role">
+                    <option value="monitoring" {% if user.role == 'monitoring' %}selected{% endif %}>모니터링</option>
+                    <option value="drone" {% if user.role == 'drone' %}selected{% endif %}>드론요원</option>
+                    <option value="standby" {% if user.role == 'standby' %}selected{% endif %}>상황대기조</option>
+                    <option value="admin" {% if user.role == 'admin' %}selected{% endif %}>관리자</option>
+                    <option value="pending" {% if user.role == 'pending' %}selected{% endif %}>승인대기</option>
+                </select>
+            </div>
+
+            <!-- 2) 사용자명 입력 구역 -->
+            <div class="form-group">
+                <label>{{ form.username.label }}</label>
+                {{ form.username(placeholder="사용자명", value=user.username) }}
+                {% for error in form.username.errors %}
+                <span style="color: red; font-size: 12px; display: block; margin-top: 4px;">{{ error }}</span>
+                {% endfor %}
+            </div>
+
+            <!-- 3) 메일 주소 입력 구역 -->
+            <div class="form-group">
+                <label>{{ form.email.label }}</label>
+                {{ form.email(placeholder="메일 주소", value=user.email) }}
+                {% for error in form.email.errors %}
+                <span style="color: red; font-size: 12px; display: block; margin-top: 4px;">{{ error }}</span>
+                {% endfor %}
+            </div>
+
+            <!-- 4) 비밀번호 입력 구역 -->
+            <div class="form-group">
+                <label>{{ form.password.label }}</label>
+                {{ form.password(placeholder="비밀번호 변경 시에만 입력") }}
+                {% for error in form.password.errors %}
+                <span style="color: red; font-size: 12px; display: block; margin-top: 4px;">{{ error }}</span>
+                {% endfor %}
+            </div>
+
+            <!-- 5) 정렬된 버튼 하단 컴포넌트 구역 -->
+            <div class="btn-container">
+                <button type="submit" class="btn-custom btn-blue">갱신</button>
+                <a href="javascript:history.back();" class="btn-custom btn-green">취소</a>
+                <button type="button" class="btn-custom btn-red" onclick="if(confirm('정말 이 사용자를 삭제하시겠습니까?')) { location.href='{{ url_for('crud.delete_user', user_id=user.id) }}'; }">삭제</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

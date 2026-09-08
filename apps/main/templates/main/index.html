@@ -1,0 +1,112 @@
+{% extends "main/base.html" %}
+
+{% block header_title %}🐾유기동물 보호센터🏡{% endblock %}
+
+{% block content %} 
+
+<style>
+    body {
+        background-image: url("{{ url_for('static', filename='images/shelter_bg.jpg') }}") !important;
+        background-size: cover !important;
+        background-position: center !important;
+        background-repeat: no-repeat !important;
+        background-attachment: fixed !important; /* 스크롤해도 배경은 고정 */
+        margin: 0 !important;
+        padding: 0 !important;
+        min-height: 100vh !important;
+    }
+
+    /* 만약 base.html 내부 컨테이너 때문에 여백이 남는 것을 방지 */
+    .container, .wrapper, #content {
+        background: transparent !important; /* 부모 컨테이너들의 배경을 투명하게 */
+        max-width: 100% !important;
+        width: 100% !important;
+        padding: 0 !important;
+        margin: 0 !important;
+    }
+</style>
+
+{% if current_user.is_authenticated %}
+    <div style="display: flex !important; 
+                flex-direction: row !important; 
+                justify-content: center !important; 
+                align-items: center !important; 
+                gap: 40px !important; 
+                height: calc(100vh - 160px) !important; 
+                width: 100% !important; 
+                max-width: 100% !important;
+                box-sizing: border-box !important;">
+                
+        <a href="{{ url_for('main.userctrl') }}" class="menu-card">
+            <div class="card-title">직원 정보 관리</div>
+        </a>
+
+        <a href="{{ url_for('main.control') }}" class="menu-card">
+            <div class="card-title">관제</div>
+        </a>
+    </div>
+
+{% else %}
+    <style>
+        .auth-card-container {
+            display: flex !important;
+            flex-direction: column !important;
+            justify-content: center !important;
+            align-items: center !important;
+            gap: 24px !important;
+            height: calc(100vh - 200px) !important; /* 중앙 정렬을 위해 높이 확보 */
+            width: 100% !important;
+        }
+
+        .auth-menu-card {
+            width: 320px !important;
+            height: 125px !important;
+            background: rgba(74, 53, 37, 0.9) !important; /* 뒤 배경이 보일 수 있게 반투명 어두운 색 조합 */
+            border-radius: 20px !important;
+            border: 1px solid rgba(255, 255, 255, 0.2) !important;
+            text-decoration: none !important;
+            
+            display: inline-flex !important;
+            justify-content: center !important;
+            align-items: center !important;
+            
+            backdrop-filter: blur(10px) !important; /* 뒤 배경이 흐려지는 고급스러운 효과 */
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3) !important;
+            transition: all 0.3s ease !important;
+        }
+
+        .auth-menu-card:hover {
+            transform: translateY(-5px) !important;
+            background: rgba(74, 53, 37, 0.9) !important; 
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.4) !important;
+            border-color: rgba(255, 255, 255, 0.4) !important;
+        }
+
+        .auth-card-title {
+            color: #ffffff !important;
+            font-size: 22px !important;
+            font-weight: bold !important;
+            letter-spacing: 1px;
+        }
+        
+        .auth-card-title i {
+            margin-right: 10px;
+        }
+    </style>
+
+    <div class="auth-card-container">
+        <a href="{{ url_for('auth.login') }}" class="auth-menu-card">
+            <div class="auth-card-title">
+                <i class="fa-solid fa-right-to-bracket"></i>로그인 시작하기
+            </div>
+        </a>
+
+        <a href="{{ url_for('auth.signup') }}" class="auth-menu-card">
+            <div class="auth-card-title">
+                <i class="fa-solid fa-user-plus"></i>신규 유저 등록
+            </div>
+        </a>
+    </div>
+{% endif %}
+
+{% endblock %}

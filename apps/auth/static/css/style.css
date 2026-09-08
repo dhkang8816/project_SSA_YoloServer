@@ -1,0 +1,128 @@
+css
+/* 기본 초기화 */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+/* 
+  [핵심] 배경 이미지 경로 설정
+  css 파일 위치 기준으로 images 폴더 안의 이미지를 가져옵니다 
+*/
+body {
+    font-family: 'Malgun Gothic', sans-serif;
+    background: url('./images/shelter_bg.png') no-repeat center center fixed;
+    background-size: cover; /* 화면에 꽉 차게 조절 */
+    height: 100vh;
+    display: flex;
+    justify-content: flex-start; /* 로그인 박스를 좌측으로 정렬 */
+    align-items: center;
+    padding-left: 10%; /* 왼쪽 여백을 주어 강아지 그림을 가리지 않게 함 */
+}
+
+/* 로그인 컨테이너 */
+.login-container {
+    width: 340px;
+}
+
+/* 타이틀 스타일 (기존 롤 폰트 느낌 재현) */
+.system-title h1 {
+    color: #e4d1b9;
+    font-size: 28px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    line-height: 1.2;
+    margin-bottom: 25px;
+    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+}
+
+/* 로그인 박스 디자인 (반투명 어두운 회청색) */
+.login-box {
+    background-color: rgba(26, 38, 49, 0.88); 
+    border: 1px solid #5b4d3e;
+    padding: 30px 25px;
+    box-shadow: 0 0 25px rgba(0,0,0,0.6);
+}
+
+.box-title {
+    color: #a3a3a3;
+    font-size: 13px;
+    margin-bottom: 20px;
+}
+
+/* 입력창 스타일 */
+.input-group {
+    margin-bottom: 15px;
+}
+
+.input-group label {
+    display: block;
+    color: #8c8c8c;
+    font-size: 11px;
+    margin-bottom: 5px;
+}
+
+.input-group input {
+    width: 100%;
+    padding: 10px;
+    background-color: #f2f2f2;
+    border: 1px solid #525252;
+    font-size: 14px;
+    outline: none;
+}
+
+/* 하단 버튼 및 링크 */
+.form-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 20px;
+    margin-bottom: 20px;
+}
+
+.remember-me {
+    color: #8c8c8c;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.login-btn {
+    background: linear-gradient(to bottom, #4c4c4c, #1a1a1a);
+    border: 1px solid #5c5c5c;
+    color: #cdbe91;
+    padding: 8px 24px;
+    font-size: 12px;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+.login-btn:hover {
+    background: linear-gradient(to bottom, #5c5c5c, #2a2a2a);
+    color: #fff;
+}
+
+.login-footer {
+    border-top: 1px solid #2e3b46;
+    padding-top: 15px;
+    font-size: 11px;
+}
+
+.login-footer p {
+    color: #8c8c8c;
+    margin-bottom: 8px;
+}
+
+.login-footer a {
+    color: #00bcff;
+    text-decoration: none;
+}
+
+.login-footer a:hover {
+    text-decoration: underline;
+}
+
+.find-link {
+    display: block;
+    margin-bottom: 5px;
+}

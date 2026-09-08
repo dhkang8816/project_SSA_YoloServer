@@ -1,0 +1,73 @@
+{% extends "main/base.html" %}
+{% block title %}보호 현황{% endblock %}
+
+{% block content %}
+<div class="w-100 text-start"style="!important;">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <h2 class="fw-bold text-dark m-0 fs-3">
+            <i class="fa-solid fa-users-gear text-secondary me-2"> 보호 현황</i>
+        </h2>
+
+        <div class="d-flex flex-column align-items-end gap-2" style="width: 400px;"> <div class="d-flex flex-row gap-2 w-100">
+                <a href="{{ url_for('stream.index') }}" class="btn btn-dark flex-fill fw-semibold rounded-pill shadow-sm" style="background-color: #4A3525; height: 50px; display: inline-flex; align-items: center; justify-content: center;">
+                    영상 감지 화면
+                </a>
+                <a href="{{ url_for('control_page.index') }}" class="btn btn-dark flex-fill fw-semibold rounded-pill shadow-sm" style="background-color: #4A3525; height: 50px; display: inline-flex; align-items: center; justify-content: center;">
+                    메뉴 화면
+                </a>
+            </div>
+            
+            <a href="{{ url_for('detect_data.update_animals') }}" class="btn btn-dark fw-semibold rounded-pill shadow-sm w-100" style="background-color: #4A3525; height: 50px; display: inline-flex; align-items: center; justify-content: center;">
+                <i class="fa-solid fa-user-plus me-1"></i>유기동물 현황 관리
+            </a>
+        </div>
+    </div>
+</div>
+
+<div class="bg-white p-4 rounded-4 shadow-sm border border-0">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light border-top-0">
+                    <tr class="text-secondary fw-semibold align-middle" style="font-size: 15px; height: 55px;">
+                        <th scope="col" class="table-center" style="vertical-align: middle !important;background-color: #b19682 !important;">유기동물 종류</th>
+                        <th scope="col" class="table-center" style="vertical-align: middle !important;background-color: #b19682 !important;">유기동물 마리수</th>
+                        <th scope="col" class="py-3 text-center" style="vertical-align: middle !important; width: 100px;background-color: #b19682 !important;">관리</th>
+                    </tr>
+                </thead>
+                
+                <tbody>
+                    {% for animal in animals %}
+                    <tr style="transition: background-color 0.2s ease;">
+
+                        <td class="table-center">
+                            {% if animal.animal_type == 'cat' %}
+                                고양이
+                            {% elif animal.animal_type == 'dog' %}
+                                강아지
+                            {% else %}
+                                {{ animal.animal_type }}
+                            {% endif %}
+                        </td>
+                        <td class="table-center">{{ animal.animal_count if animal.animal_count is not none else 0 }}</td>
+                        
+                        <td class="text-center">
+                            <form action="{{ url_for('detect_data.delete_animal', animal_id=animal.animal_id) }}" 
+                                method="POST" 
+                                onsubmit="return confirm('정말 이 항목을 삭제하시겠습니까?');" 
+                                class="d-inline">
+                                
+                                {{ form.csrf_token }}
+                                
+                                <button type="submit" class="btn btn-sm btn-outline-danger rounded-pill px-3">
+                                    <i class="fa-solid fa-trash-can me-1"></i>삭제
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

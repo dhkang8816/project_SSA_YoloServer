@@ -1,0 +1,255 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap');
+
+/* 기본 폰트 강제 지정 */
+body, text, span, h1, h2, th, td, a {
+    font-family: 'Noto Sans KR', sans-serif !important;
+}
+
+/* 묵직한 다크 카드 스타일 (메인화면 버튼용) */
+.menu-card {
+    background-color: #4A3525 !important;
+    border-radius: 24px;
+    width: 280px;
+    height: 280px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-decoration: none;
+    transition: all 0.3s ease;
+    box-shadow: 0 0 0 2px rgba(228, 191, 30, 0.1), 0 10px 25px rgba(0, 0, 0, 0.15);
+    border: none;
+}
+
+/* 마우스 올렸을 때 위로 들리며 블루 네온으로 빛나는 효과 */
+.menu-card:hover {
+    transform: translateY(-8px);
+    background-color: #3a475c !important;
+    box-shadow: 0 0 0 3px #63b3ed, 0 15px 30px rgba(66, 153, 225, 0.25) !important;
+}
+
+/* 카드 내부 큼직한 아이콘 */
+.card-icon {
+    font-size: 70px;
+    color: #e2e8f0;
+    margin-bottom: 25px;
+}
+
+/* 카드 내부 텍스트 */
+.card-title {
+    font-size: 22px;
+    font-weight: 700;
+    color: #ffffff !important;
+}
+
+/* 1. 전체를 감싸는 최외곽 컨테이너: 가운데 정렬 */
+.main-employee-main {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 70vh; /* 화면 세로 중앙 근처에 위치하도록 설정 */
+    padding: 20px;
+    
+}
+   
+
+/* 2. 폼을 담고 있는 카드 (가로가 짧은 직사각형 + 둥근 모서리) */
+.card.main-employee-signup {
+    width: 100%;
+    max-width: 450px;           /* 가로가 너무 길어지지 않게 꽉 잡아줌 */
+    background-color: #ffffff !important; 
+    border: 1px solid #eeeeee !important; /* 아주 연한 테두리 */
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05) !important; /* 은은한 그림자 */
+    border-radius: 20px !important;
+    padding: 40px 35px;         /* 내부 여백을 주어 답답함 해소 */
+    box-sizing: border-box;
+}
+
+@media (max-width: 576px) {
+  .card.main-employee-signup {
+    padding: 25px 20px !important; /* 모바일에서는 여백을 줄임 */
+    border-radius: 16px !important;
+  }
+  .card.main-employee-signup header {
+    font-size: 22px !important; /* 타이틀 크기 조정 */
+  }
+}
+
+/* 전체 배경을 네이비로 설정 */
+body {
+    background-color: #fcfcfc !important; 
+    color: #333 !important;
+}
+
+/* 3. 상단 헤더 (사용자 신규 등록 타이틀) */
+.card.main-employee-signup header {
+    font-size: 27px;
+    font-weight: 900;
+    color: #333 !important;
+    margin-bottom: 28px;        /* 첫 입력창과의 수직 간격 */
+    text-align: left;
+}
+
+/* 4. WTForms 입력창들 (사용자명, 메일주소, 비밀번호) */
+.main-employee-input {
+    width: 100% !important;
+    display: block;
+    padding: 14px 18px !important;
+    font-size: 16px !important;
+    color: #161616 !important;
+    background-color: #f9f9f9 !important; /* 아주 연한 회색 */
+    border: 1px solid #e0e0e0 !important;
+    border-radius: 14px !important;        /* 입력창 모서리 둥글게 */
+    margin-bottom: 18px !important;       /* 다닥다닥 붙지 않게 수직 간격(여백) 추가 */
+    outline: none;
+    box-sizing: border-box;
+    transition: all 0.2s ease;
+}
+
+/* 입력창 포커스(클릭) 시 블루 네온 효과 */
+.main-employee-input:focus {
+    border-color: #63b3ed !important;
+    box-shadow: 0 0 0 3px rgba(99, 179, 237, 0.3) !important;
+}
+
+/* 5. 신규 등록 버튼 */
+.main-employee-btn {
+    width: 100% !important;               /* 버튼도 입력창과 가로 폭 맞추기 */
+    padding: 14px !important;
+    font-size: 18px !important;
+    font-weight: 700 !important;
+    background-color: #333 !important; /* 따뜻한 갈색(SaddleBrown) */
+    color: #ffffff !important;
+    border: none !important;
+    transition: background 0.3s ease;
+    border-radius: 12px !important;       /* 버튼 모서리 둥글게 */
+    cursor: pointer;
+    margin-top: 8px !important;           /* 위 입력창과의 간격 */
+}
+
+/* 버튼 마우스 호버 효과 */
+.main-employee-btn:hover {
+    background-color: #333 !important;
+    box-shadow: 0 0 15px rgba(245, 180, 2, 0.4) !important;
+}
+
+/* 6. 에러/안내 플래시 메시지 스타일 */
+.main-employee-flash {
+    background-color: #e53e3e;            /* 다크모드에 어울리는 톤다운된 레드 */
+    color: #ffffff;
+    padding: 10px 14px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    font-size: 14px;
+}
+
+/* 기본 상태: 잘 보이는 밝은 회색 */
+.main-employee-input::placeholder {
+    color: #a0aec0 !important;   /* 가독성이 좋은 부드러운 밝은 회색 */
+    opacity: 1;                  /* 브라우저 기본 투명도 제어 파괴 */
+    font-weight: 400;
+}
+
+/* 입력창에 마우스를 올렸을 때 (Hover) */
+.main-employee-input:hover::placeholder {
+    color: #1615159d !important;   /* 조금 더 밝은 회색으로 변경 */
+}
+
+/* 3. ★ 핵심: 클릭(포커스)했을 때 글씨를 투명하게 만들어 숨김 ★ */
+.main-employee-input:focus::placeholder {
+    color: transparent !important; /* 글자색을 투명하게 처리 */
+}
+/* 부트스트랩 select 고유 설정을 완전히 덮어쓰는 최종 코드 */
+.card.main-employee-signup .form-select,
+.card.main-employee-signup select {
+    background-color: #f8f9fa !important; /* 👈 마리수 창과 동일한 어두운 검은색 */
+    color: #111111 !important;            /* 👈 글자색 흰색 */
+    border: 1px solid #f7f7f7 !important; /* 👈 테두리 선 */
+    background-image: none !important;    /* 👈 부트스트랩 고유의 우측 화살표 아이콘 강제 제거 */
+    padding-right: 18px !important;       /* 여백 조정 */
+}
+.card.main-employee-signup label {
+    color: #555 !important;
+}
+/* "동물 종류" 및 라벨 글씨의 크기와 굵기를 조절하는 코드 */
+.card.main-employee-signup label {
+    font-size: 19px !important;    /* 👈 [폰트 크기] 현재보다 더 크게 키우려면 숫자를 늘리세요 (기본은 보통 14~16px) */
+    font-weight: 800 !important;   /* 👈 [폰트 굵기] 글씨를 더 두껍고 명확하게 고정 (700 = bold) */
+    margin-bottom: 8px !important; /* 👈 [여백] 글씨와 아래 입력창 사이의 간격 조절 */
+}
+
+.status-badge {
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid #d6c7b8;
+  padding: 8px 15px;
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #4A3B30;
+  display: inline-block;
+  margin-bottom: 20px;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #fdf6ee; 
+}
+::-webkit-scrollbar-thumb {
+  background: #a68b75; /* 브라운 톤 */
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #4A3B30; /* 강조색 */
+}
+
+/* 드롭다운 호버시 메뉴 표시 (Bootstrap 기본 구조와 호환) */
+@media (min-width: 992px) {
+    .navbar .nav-item.dropdown:hover .dropdown-menu {
+        display: block;
+        margin-top: 0; /* Bootstrap 기본 마진 제거 */
+    }
+}
+
+/* 드롭다운 화살표 없애기 (선택 사항: 디자인을 위해) */
+.navbar .nav-link.dropdown-toggle::after {
+    display: none; 
+}
+
+/* 원하는 색상으로 정의 */
+.custom-nav-color {
+    color: #ffd700 !important; /* 금색 예시 */
+}
+
+/* 마우스 올렸을 때의 색상도 설정 가능 */
+.custom-nav-color:hover {
+    color: #ffffff !important;
+}
+
+/* CSS 파일에 추가 */
+.table-center {
+    text-align: center;
+}
+
+/* 제목(보호소 감지 내역) 아래 여백 축소 */
+h2, .section-title {
+    margin-bottom: 5px !important; /* 기본값보다 훨씬 작게 설정 */
+}
+
+/* 버튼 그룹 아래 여백 축소 */
+.button-group, .action-buttons {
+    margin-bottom: 10px !important;
+}
+
+/* 테이블 상단 여백 제거 */
+table {
+    margin-top: 0 !important;
+}
+
+/* 테이블의 헤더(th)와 데이터(td)를 모두 중앙 정렬 */
+.table th, .table td {
+    text-align: center !important;
+    vertical-align: middle !important;
+}
+

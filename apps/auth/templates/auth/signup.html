@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>직원 신규 등록</title>
+    <!-- 내부 로컬 부트스트랩 CSS 연결 -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <style>
+        
+        body {
+            margin: 0;
+            padding: 0; 
+            background-image: url("{{ url_for('static', filename='images/shelter_bg.jpg') }}");
+            background-size: cover; /* 이미지를 화면에 꽉 차게 조절 */
+            background-size: cover; 
+            background-position: center; 
+            background-repeat: no-repeat;
+            background-color: #fff7ed;
+            overflow: hidden;
+            height: 100vh !important;
+            width: 100vw !important;
+            display: flex !important;
+            justify-content: center !important; 
+            align-items: center !important;
+        }
+        /* 로그인/회원가입 카드창을 반투명하고 부드러운 하얀색으로 변경 */
+            .login-card {
+            width: 420px !important; 
+            max-width: 95%; /* 모바일 환경 배려 */
+            border-radius: 40px !important;
+            background-color: rgba(255, 255, 255, 0.92) !important; /* 조금 더 선명하게 보정                                                         */
+            backdrop-filter: blur(10px); 
+            border: 1px solid rgba(255, 165, 0, 0.25); 
+            padding: 45px 40px !important; /* 내부 여백도 넓혀서 쾌적하게 만듦 */
+            outline: none !important;
+            box-shadow: 0 12px 35px rgba(0, 0, 0, 0.18) !important;
+        }  
+        /* .field-group {
+            margin-bottom: 20px !important;
+            text-align: left !important; 
+            width: 100% !important;
+            display: block !important;
+        }       */
+       
+        .text-animal { 
+            color: #d35400; 
+        }
+        .field-group {
+            margin-bottom: 22px !important;
+            text-align: left !important; 
+        }
+     
+            .text-animal {
+            color: #d35400; 
+            font-weight: 700;
+        }
+
+
+        /* 동물 테마에 맞춘 메인 포인트 색상 (포근한 주황색) */
+        /* 가입하기 버튼 */
+        .btn-primary-animal {                                
+            background-color: #ff9f43;
+            border-color: #ff9f43;
+            color: white !important;
+        }
+        /* .btn-primary-animal:hover {
+            background-color: #ee5253;
+            border-color: #ee5253;
+        }
+        .btn-outline-animal {
+            color: #ff9f43;
+            border-color: #ff9f43;
+        }
+        .btn-outline-animal:hover {
+            background-color: #ff9f43;
+            color: white;
+        }
+        .text-animal {
+            color: #d35400; 
+        } */
+
+        /* ...기존 코드들... */
+
+    /* 💡 1. 입력창 안의 글자(힌트 텍스트 및 타이핑 글자) 크기 키우기 */
+    .form-control {
+        font-size: 14px !important;  /* 원래보다 큼직하게 변경 */
+        padding: 8px 10px !important; /* 글자가 커진 만큼 입력창 두께도 늘림 */
+    }
+
+    /* 💡 2. '이름', '비밀번호' 같은 항목 이름표 글자 크기 키우기 */
+    .form-label {
+        font-size: 18px !important;  /* small 크기 무시하고 16px로 고정 */
+    }
+
+    /* 💡 3. '신규 등록' 버튼 글자 크기 키우기 */
+    .btn-primary-animal {
+        font-size: 13px !important;  /* 버튼 글씨를 시원하게 확대 */
+        padding: 10px !important;
+    }
+    form-signin {
+    display: flex !important;
+    flex-direction: column !important; /* 내부 요소들을 무조건 위에서 아래로 정렬 */
+    gap: 15px !important;              /* 입력창들 사이에 15px만큼 확실하게 간격 벌리기 */
+    width: 100% !important;
+}
+
+/* 입력창들 각각을 한 줄에 하나씩만 배치 */
+.form-signin .form-control.dt-auth-input {
+    display: block !important;
+    width: 60% !important;            /* 가로폭을 꽉 채워서 옆에 아무것도 못 오게 막음 */
+}
+
+/* 가입하기 버튼이 밀리지 않도록 간격 조정 */
+.form-signin button[type="submit"] {
+    margin-top: 10px !important;
+}
+ 
+
+    </style>
+</head>
+
+
+<!-- 📝 [회원가입 화면(유기동물 보호센터)] 레이아웃 구역 -->
+<div class="card p-4 shadow-lg text-dark login-card my-4">
+    <div class="text-center mb-4">
+        <h3 class="fw-bold text-animal">신규 직원 등록 </h3>
+        
+    </div>
+    
+    <!-- 화면 중앙 경고창 (Flash Message) 출력 구역 -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="alert alert-danger text-center alert-dismissible fade show py-2 small" role="alert">
+            <strong>{{ message }}</strong>
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <header>신규 직원 등록</header>
+        <section>
+            <form action="{{ url_for('auth.signup') }}" method="POST" novalidate="novalidate" class="form-signin">
+                
+                {% for message in get_flashed_messages() %}
+                <div class="dt-auth-flash">{{ message }}</div>
+                {% endfor %}
+
+                {{ form.csrf_token }}
+                {{ form.username(size=30, class="form-control dt-auth-input", placeholder="이름") }}
+
+                {{ form.email(class="form-control dt-auth-input",placeholder="이메일 주소") }}
+
+                {{ form.password(class="form-control dt-auth-input",placeholder="비밀번호") }}
+                <!-- 5. 회원가입 완료 버튼 -->
+                <button type="submit" class="btn btn-primary-animal btn-lg w-100 mt-3 mb-3 fw-bold shadow-sm">가입하기</button>
+        
+        
+        <!-- 6. 로그인 이동 버튼 -->
+        <div class="text-center mt-2" style="font-size: 0.95rem;">
+            <span class="text-muted">이미 계정이 있으신가요?</span>
+            <a href="{{ url_for('auth.login') }}" class="text-decoration-none text-animal fw-bold ms-1">로그인하기</a>
+
+            
+        </div>
+    </form>
+</div>
+
+<!-- 내장 부트스트랩 JS 연동 -->
+<script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"></script>
+</body>
+</html>

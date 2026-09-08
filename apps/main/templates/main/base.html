@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}유기동물 보호센터{% endblock %}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm px-3 py-2" style="background-color: #4A3525 !important;">
+        <div class="container-fluid">
+            <a class="navbar-brand fw-bold fs-4 d-flex align-items-center gap-2" href="{{ url_for('main.index') }}">
+                {% block header_title %}🐾유기동물 보호센터🏡{% endblock %}
+            </a>
+            
+            <div class="collapse navbar-collapse" id="navbarResponsive">
+                {% if current_user.is_authenticated %}
+                <ul class="navbar-nav text-uppercase ms-auto py-4 py-lg-0">
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('main.userctrl') }}">직원 관리</a></li>
+                    <li class="nav-item"><a class="nav-link" href="{{ url_for('stream.index') }}">관제 화면</a></li>
+                    <li class="nav-item dropdown">
+                        <a class="nav-link custom-nav-color" href="#" id="dbDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            DB 내역
+                        </a>
+                        <ul class="dropdown-menu" aria-labelledby="dbDropdown">
+                            <li><a class="dropdown-item" href="{{ url_for('detect_data.animal_db') }}">보호 현황</a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('detect_data.detect_animal') }}">보호소 감지 내역</a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('detect_data.danger_db') }}">야생동물 출몰 내역</a></li>
+                        </ul>
+                    </li>
+                </ul>
+                {% endif %}
+            </div>
+
+            <li class="nav-item" style="margin-right: 30px;"></li>
+
+            <ul class="navbar-nav ms-auto align-items-center">
+                {% if current_user.is_authenticated %}
+                    <li class="nav-item d-flex align-items-center gap-2 me-4">
+                        <span class="text-white fw-semibold">
+                            <i class="fa-regular fa-user me-1"></i>{{ current_user.username }}님
+                        </span>
+                        <a href="{{ url_for('auth.logout') }}" class="btn btn-outline-danger btn-sm px-3">로그아웃</a>
+                    </li>
+                {% else %}
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('auth.signup') }}">신규 등록</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link fw-bold text-white" href="{{ url_for('auth.login') }}">로그인</a>
+                    </li>
+                {% endif %}
+            </ul>
+        </div>
+    </nav>
+    
+
+    <div class="container mt-4 mb-0">
+        {% with messages = get_flashed_messages() %}
+            {% if messages %}
+                {% for message in messages %}
+                    <div class="alert alert-success alert-dismissible fade show shadow-sm rounded-3 py-3" role="alert">
+                        <div class="d-flex align-items-center">
+                            <i class="fa-solid fa-circle-check text-success fs-5 me-2"></i>
+                            <span class="fw-semibold text-dark">{{ message }}</span>
+                        </div>
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+    </div>
+
+    <main class="flex-grow-1 d-flex justify-content-center py-4">
+        <section class="container">
+            {% block content %}{% endblock %}
+        </section>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

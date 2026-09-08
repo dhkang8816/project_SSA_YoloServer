@@ -1,0 +1,9 @@
+*.pt
+*.db
+*.sqlite
+runs/
+__pycache__/
+.vscode/
+videos/
+*.mp4
+

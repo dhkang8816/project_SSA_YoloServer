@@ -1,0 +1,49 @@
+{% extends "main/base.html" %}
+{% block title %}보호 동물 현황 관리{% endblock %}
+{% block content %}
+<div class="mx-auto main-employee-main">
+    <div class="card main-employee-signup" style="max-width: 500px;">
+        <header>보호 동물 현황 관리</header>
+        
+        <section style="padding: 20px;">
+            <form action="{{ url_for('detect_data.update_animals') }}" method="POST" class="form-manage">
+                
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                
+                <div class="mb-4">
+                    <label for="animal_type" class="form-label fw-bold text-white d-block mb-2">동물 종류</label>
+                    <select name="animal_type" id="animal_type" class="form-select w-100 py-2 px-3 rounded-3" style="background-color: #3a475c; color: white; border: 1px solid #4a5568;">
+                        <option value="dog" selected>강아지</option>
+                        <option value="cat">고양이</option>
+                    </select>
+                </div>
+
+                <div style="margin-bottom: 25px;">
+                    <label style="color: #a0aec0; display: block; margin-bottom: 10px; font-size: 15px; font-weight: 500;">
+                        <i class="fas fa-dog"></i> 현재 보호 중인 동물 마리수
+                    </label>
+                    <input type="number" 
+                           name="animal_count" 
+                           class="form-control main-employee-input" 
+                           value="{% if config %}{{ config.animal_count }}{% else %}0{% endif %}" 
+                           min="0" 
+                           required 
+                           placeholder="마리수 입력">
+                </div>
+
+                <div class="mb-3">
+                    <button type="submit" class="btn btn-md btn-primary main-employee-btn d-block w-100" style="letter-spacing: 1px; padding: 10px 0;">
+                        업데이트
+                    </button>
+                </div>
+
+                <div style="text-align: center; margin-top: 15px;">
+                    <a href="{{ url_for('detect_data.animal_db') }}" style="color: #718096; text-decoration: none; font-size: 14px; display: inline-block;">
+                        <i class="fas fa-arrow-left"></i> 돌아가기
+                    </a>
+                </div>
+            </form>
+        </section>
+    </div>
+</div>
+{% endblock %}

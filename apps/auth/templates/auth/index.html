@@ -1,0 +1,21 @@
+{% extends "auth/base.html" %}
+
+{% block title %}인증 페이지{% endblock %}
+
+{%block content %} 
+    <ul>
+        <li>
+            <a href="{{url_for('auth.signup')}}">회원 가입</a>
+        </li>
+        <li>
+            <a href="{{url_for('auth.login')}}">로그인</a>
+        </li> 
+    </ul>
+
+    <head>
+        <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+
+    </head>
+
+{% endblock %}
