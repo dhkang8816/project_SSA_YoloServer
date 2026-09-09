@@ -4,6 +4,8 @@ import threading
 from ultralytics import YOLO
 from apps.services import oracle_service
 from apps.services import notifier
+import os
+
 
 current_frame = None
 current_boxes = []
@@ -51,7 +53,6 @@ if 'last_alarm_time' not in globals():
 
 ALARM_COOLDOWN = 10.0
 
-
 def init_ai_metadata_from_oracle():
     global ANIMAL_NAME_MAP, TARGET_ANIMALS, program_start_time
     program_start_time = time.time()
@@ -75,11 +76,8 @@ def init_ai_metadata_from_oracle():
         print(f"⚠️ [초기화 예외 발생] 오라클 수급 실패로 기본 코드 고정값을 유지합니다. 에러: {e}")
 
 
-def process_animal_detection_logic(detected_names):
-    """감지 수량과 오라클 목표치를 비교하여 10초 지속 시 스프링 API를 호출하고 이상객체 출현을 판단합니다."""
-    # 🔒 함수 내부에서는 상단의 안전한 전역 딕셔너리를 그대로 가져와서 알맹이(시간)만 변경합니다.
+def process_animal_detection_logic(detected_names, frame):  # 🌟 매개변수 맨 끝에 frame 추가!
     global last_alarm_time
-    
     under_target = globals()['under_target_start_time']
     recovery = globals()['recovery_start_time']
     current_time = time.time()
@@ -91,30 +89,22 @@ def process_animal_detection_logic(detected_names):
         target_count = int(TARGET_ANIMALS.get(int(code_id), TARGET_ANIMALS.get(str(code_id), 0)))
         current_count = detected_names.count(eng_name)
         
-        # 🎯 1트랙: 해당 축종이 진짜 부족할 때
         if current_count < target_count:
-            recovery[code_id] = None # 미달 순간 회복 타이머 즉시 리셋
-            
-            # 최초 감지 시점에만 단 '한 번' 정확하게 찍힙니다.
+            recovery[code_id] = None
             if under_target.get(code_id) is None:
                 under_target[code_id] = current_time
-                print(f"⏰ [{eng_name}] 개체수 미달 최초 감지! 10초 타이머 초읽기를 시작합니다. (시작시간 고정: {current_time})")
-            
-            # 드디어 시간이 리셋되지 않고 정직하게 10초 누적 장벽을 통과하게 됩니다!
             elif (current_time - under_target[code_id]) >= 10.0:
                 if (current_time - last_alarm_time.get(code_id, 0)) >= ALARM_COOLDOWN:
                     last_alarm_time[code_id] = current_time
                     hangle_name = ANIMAL_NAME_MAP.get(eng_name, eng_name)
                     
-                    print(f"🚨 [경보 발령] {hangle_name} 미달 10초 지속! 스프링 중계 허브로 전송을 시작합니다.")
-                    
+                    # 🌟 [트랙 A 호출부 교체] 맨 끝에 frame=frame 을 정밀 바인딩합니다.
                     oracle_service.send_log_to_oracle(
                         animal_type=code_id,
                         detect_count=current_count,
-                        reason=f"AI 관제 시스템 실시간 분석 - {hangle_name} 보유 마리수 기준치 미달 현상 지속"
+                        reason=f"AI 관제 시스템 실시간 분석 - {hangle_name} 보유 마리수 기준치 미달 현상 지속",
+                        frame=frame 
                     )
-                    
-        # 🎯 2트랙: 해당 축종이 정상 수량으로 돌아왔을 때
         else:
             if under_target.get(code_id) is not None:
                 if recovery.get(code_id) is None:
@@ -123,23 +113,23 @@ def process_animal_detection_logic(detected_names):
                     under_target[code_id] = None
                     recovery[code_id] = None
                     print(f"✅ [{eng_name}] 2.5초간 정상 수량 유지됨 -> 타이머 리셋.")
+
     # -------------------------------------------------------------
     # Part B. [최종 활성화] 위험 야생동물(이상객체) 출현 실시간 포착 벨트
     # -------------------------------------------------------------
-    # 🎯 YOLO 가 뱉어내는 실제 영문 사물 클래스 명칭 4종 세트를 인지 엔진에 등록합니다!
     for danger_name in ["blue_alien", "blue_shark", "pink_dragon", "tiger"]:
         if danger_name in detected_names:
-            code_id = YOLO_TO_CODE.get(danger_name) # '2', '3', '4', '5'
+            code_id = YOLO_TO_CODE.get(danger_name)
             if not code_id: continue
             
-            # 위험 사물은 발견 즉시 쿨다운(10초) 장치를 가동하며 오라클 DB에 실시간 인서트 진행
             if (current_time - last_alarm_time.get(code_id, 0)) >= ALARM_COOLDOWN:
                 last_alarm_time[code_id] = current_time
                 hangle_danger = ANIMAL_NAME_MAP.get(danger_name, danger_name)
                 print(f"🚨 [위험 이상객체 포착] 관제 구역 내 {hangle_danger} 출현 확인! 오라클 즉시 원격 적재 트리거 가동.")
                 
-                # 오라클 DANGER_LOG 테이블에 원격 인서트 수행
-                oracle_service.send_danger_log_to_oracle(danger_type=code_id)
+                # 🌟 [트랙 B 호출부 교체] 매개변수 순서 조율에 맞춰 danger_type 다음 자리에 frame=frame 주입!
+                oracle_service.send_danger_log_to_oracle(danger_type=code_id, frame=frame)
+
 
 def change_ai_source_runtime(mode, path_or_url):
     global current_mode, current_source_path, source_changed
@@ -152,10 +142,11 @@ def video_capture_and_detect():
     global current_frame, current_boxes, source_changed, current_mode, current_source_path
     
     # 🎯 프로젝트 실물 custom 가중치 파일 경로 사수
+    # 문자열을 쪼개지 말고 반드시 이렇게 깔끔하게 한 줄로 작성하셔야 합니다.
     model = YOLO("C:/project_team3/workspaces/project_SSA/runs/detect/my_yolov12_project/yolov8n_train-6/weights/best.pt")
+
     cap = cv2.VideoCapture(current_source_path)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    
+
     init_ai_metadata_from_oracle()
 
     while is_running:
@@ -220,11 +211,12 @@ def video_capture_and_detect():
                 
             # 🎯 [대통합 개통] 이제 detected_names 안에 ['pink_dragon', 'dog']가 꽉 차서 
             # 타이머 변수셋 내부로 드디어 신호탄이 정상 수급 및 점화됩니다!
-            process_animal_detection_logic(detected_names)
+            process_animal_detection_logic(detected_names, current_frame)
             
             time.sleep(0.03)
         except Exception as e:
             print(f"⚠️ [하이브리드 코어 루프 예외 방어]: {e}")
             time.sleep(0.5)
+
 ai_thread = threading.Thread(target=video_capture_and_detect, daemon=True)
 ai_thread.start()

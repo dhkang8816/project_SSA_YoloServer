@@ -14,6 +14,13 @@ import os
 from apps.services import oracle_service
 from apps.services import yolo_detector
 
+# 🌟 [OpenCV 좀비 락 원천 폭파선]
+# 파이썬 OpenCV 라이브러리의 밑단 네트워크 코어(FFmpeg)에 환경 변수를 강제 각인시킵니다.
+# ESP32 기기가 꺼져서 패킷 지연이 1초(1000000 마이크로초)를 넘어가는 순간,
+# 30초 동안 미련하게 대기하지 말고 즉시 "연결 실패(False)"를 뱉고 루프를 탈출하게 만듭니다.
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "timeout;1000000"
+global_esp_cap = None
+
 warnings.filterwarnings("ignore", category=FutureWarning)
 # 💡 스레드 함수 직전에 상태 감지용 플래그 전역 변수 하나 추가
 has_resetted = False
@@ -25,7 +32,7 @@ esp32_yolov12 = Blueprint(
     static_folder="static",
 )
 
-ESP32_STREAM_URL = "http://192.168.137.212:80/stream"
+ESP32_STREAM_URL = "http://192.168.137.128:80/stream"
 esp32_current_frame = None 
 esp32_boxes = [] 
 is_running = True
@@ -47,142 +54,130 @@ def index():
         animal_detect=animal_detect
     )
 
-# 🎯 [라벨 복구 핵심 교정 1] 자바 스프링의 모드 변경 신호를 받아 AI 전역 변수를 완전히 인터락 제어합니다.
+# =================================================================
+# 🌟 [최종 완치 저격선] 비디오 전환 시 ESP32 로직 및 스레드 완전 박멸 가동
+# =================================================================
+
 @esp32_yolov12.route("/change_mode/<mode_name>")
 def change_mode_signal(mode_name):
-    global esp_mode_active, esp32_current_frame, esp32_boxes
+    global esp_mode_active, esp32_current_frame, esp32_boxes, has_resetted, global_esp_cap
     
     if mode_name == 'esp32':
         esp_mode_active = True
-        
-        # 💡 ESP32 구동 시 일반 동영상 YOLO 분석 백그라운드 연산을 멈춰서 자원 충돌을 방지합니다.
+        has_resetted = False
         yolo_detector.current_boxes = []
-        print("[플라스크] 🚁 ESP32 드론 라이브 모드 가동 승인! 일반 동영상 라벨 큐 클리어.", file=sys.stderr)
+        print("[플라스크]  ESP32 라이브 모드 가동! 스레드 출격.", file=sys.stderr)
+        
+        bg_thread = threading.Thread(target=esp32_video_stream_receiver, daemon=True)
+        bg_thread.start()
         
     else:
+        # 🌟 [치트키 발동] 사용자가 비디오 모드로 탈출하면 플래그만 바꾸는 게 아니라,
+        # 백그라운드 스레드가 갇혀있는 global_esp_cap 자원을 여기서 직접 release()로 부수어버립니다!
         esp_mode_active = False
+        has_resetted = False
+        
+        try:
+            if global_esp_cap is not None:
+                global_esp_cap.release() # ➔ 30초 대기 중이던 OpenCV 소켓관을 밖에서 강제로 깨부숩니다.
+                global_esp_cap = None
+                print("💥 [강제 차단 완수] 외부에서 ESP32 VideoCapture 커넥션을 완전히 폭파했습니다.", file=sys.stderr)
+        except Exception as e:
+            print(f"⚠ 외부 파괴 도중 예외 방어: {e}", file=sys.stderr)
+            
         with frame_lock:
             esp32_current_frame = None
             esp32_boxes = []
             
-        # 💡 [버그 완치 포인트] 일반 동영상 모드로 돌아올 때, 동영상용 AI 엔진의 타이머와 
-        # 감지 로직 안정화 대기 시간을 완전히 리셋해 주어 즉시 라벨을 그리도록 깨웁니다.
         yolo_detector.current_boxes = []
-        yolo_detector.program_start_time = time.time() # 3초 로딩 대피선 강제 리셋 효과
-        print("[플라스크] 🎬 로컬 동영상 채널 복귀 감지 -> yolo_detector 엔진 원격 기동 및 락 해제", file=sys.stderr)
+        yolo_detector.program_start_time = time.time()
         
     return jsonify({"status": "mode_changed"})
 
+
 def esp32_video_stream_receiver():
-    """백그라운드에서 무선 하드웨어 스트림을 수신해 YOLO 분석을 수행하는 엔진입니다."""
-    global esp32_current_frame, esp32_boxes, is_running, esp_mode_active, has_resetted
-    print("[스레드 가동] 하드웨어 무선 수신 백그라운드 엔진 기동.", file=sys.stderr)
+    """백그라운드에서 무선 하드웨어 스트림을 수신해 YOLO 분석을 수행하는 엔진"""
+    global esp32_current_frame, esp32_boxes, is_running, esp_mode_active, has_resetted, global_esp_cap
+    print("[스레드 가동] 🚀 하드웨어 무선 수신 백그라운드 엔진 기동.", file=sys.stderr)
     
     model = YOLO("C:/project_team3/workspaces/project_SSA/runs/detect/my_yolov12_project/yolov8n_train-6/weights/best.pt")
-    cap = None
+    full_url = "http://192.168.137.128:80/stream"
     
-    while is_running:
+    # 윈도우 환경 최적화를 위해 주입했던 CAP_FFMPEG 복귀
+    global_esp_cap = cv2.VideoCapture(full_url, cv2.CAP_FFMPEG)
+    global_esp_cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 1000) # 1초 강제 타임아웃
+    global_esp_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    
+    while is_running and esp_mode_active:
         try:
-            #  [라벨 복구 마법의 전원 스위치 개조 완료]
-            if not esp_mode_active:
-                if cap is not None:
-                    try: cap.release()
-                    except: pass
-                    cap = None
-                
-                # ⭐ 0.5초마다 무한 리셋하는 버그 원천 차단! (전환 시 단 한 번만 실행되도록 보호)
-                if not has_resetted:
-                    import time
-                    yolo_detector.program_start_time = time.time()
-                    
-                    # 안전하게 복구 주입 (딕셔너리가 살아있다면 내부 값만 리셋)
-                    if hasattr(yolo_detector, 'under_target_start_time'):
-                        yolo_detector.under_target_start_time = {"0": None, "1": None}
-                        yolo_detector.recovery_start_time = {"0": None, "1": None}
-                    
-                    has_resetted = True # 🛡️ 한 번 리셋했으므로 다음 루프부턴 건너뜁니다.
-                    print("[플라스크 백그라운드] 동영상 채널 타이머 최초 1회 초기화 완료.")
-                
-                time.sleep(0.5)
-                continue
-                
-            # ESP32 모드가 켜지면 나중에 다시 동영상 모드로 갈 때 리셋할 수 있게 플래그를 풀어줍니다.
-            has_resetted = False
-            # ✅ 요청하신 정밀 정렬 괄호 튜플 주소 규격 완벽 사수
-            if cap is None:
-                full_url = (
-                    "http://"
-                    "192.168.137.212"
-                    ":80"
-                    "/stream"
-                )
-                print(f"[DEBUG] ESP32 OpenCV 비디오 캡처 연결 시도 -> {full_url}", file=sys.stderr)
-                cap = cv2.VideoCapture(full_url)
+            # 🌟 [최전방 방어선] 모드가 꺼지면 즉시 포트를 닫고 스레드 탈출 소멸
+            if not esp_mode_active or not is_running:
+                break
             
-            if not cap.isOpened():
+            if not global_esp_cap.isOpened():
                 print("❌ [DEBUG] ESP32 카메라 스트림 열기 실패. 재시도 중...", file=sys.stderr)
-                cap = None
-                time.sleep(2)
+                time.sleep(1.0)
+                
+                # 🌟 [재연결 진입 직전 방어선] 대기 시간 동안 모드가 바뀌었는지 재확인
+                if not esp_mode_active or not is_running: break
+                
+                global_esp_cap = cv2.VideoCapture(full_url, cv2.CAP_FFMPEG)
+                global_esp_cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 1000)
                 continue
             
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            
-            success, frame = cap.read()
+            success, frame = global_esp_cap.read()
             if not success:
                 print("⚠ [DEBUG] 프레임 읽기 실패. 스트림 재연결 프로세스 가동...", file=sys.stderr)
-                if cap is not None:
-                    try: cap.release()
-                    except: pass
-                    cap = None
+                if global_esp_cap is not None: global_esp_cap.release()
                 time.sleep(0.5)
+                
+                if not esp_mode_active or not is_running: break
+                
+                global_esp_cap = cv2.VideoCapture(full_url, cv2.CAP_FFMPEG)
+                global_esp_cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 1000)
                 continue
             
+            # YOLO 추론 구간 (기존 로직 보존)
             if frame is not None and isinstance(frame, np.ndarray) and len(frame.shape) == 3:
                 results = model(frame, conf=0.5, verbose=False)
                 temp_boxes = []
-                
                 if results and len(results) > 0 and results.boxes is not None:
                     boxes_obj = results.boxes
+                    detected_names = [model.names[int(box.cls.item())] for box in boxes_obj]
                     
-                    detected_names = []
+                    yolo_detector.process_animal_detection_logic(detected_names, frame)
+                    
                     for box in boxes_obj:
-                        cls_id = int(box.cls.item())
-                        detected_names.append(model.names[cls_id])
-                    
-                    # 오라클 미달 감지 타이머 가동
-                    yolo_detector.process_animal_detection_logic(detected_names)
-                    
-                    # 🎯 [2차원 대괄호 완벽 파괴 좌표 연산 규칙 적용]
-                    for box in boxes_obj:
-                        if box.conf is not None and len(box.conf) > 0 and box.conf.item() >= 0.50:
-                            coords = box.xyxy.tolist()
-                            if len(coords) > 0:
-                                rx = coords
-                                ry = coords
-                                rw = coords - coords
-                                rh = coords - coords
-                                cls_id = int(box.cls.item())
-                                label = model.names[cls_id]
-                                score = float(box.conf.item())
-                                temp_boxes.append([rx, ry, rw, rh, label, score])
-                
-                with frame_lock:
-                    esp32_current_frame = frame.copy()
-                    esp32_boxes = temp_boxes
-            
+                        if box.conf is not None and box.conf.item() >= 0.50:
+                            coords = box.xyxy.tolist()[0]
+                            temp_boxes.append([coords[0], coords[1], coords[2]-coords[0], coords[3]-coords[1], model.names[int(box.cls.item())], float(box.conf.item())])
+                    with frame_lock:
+                        esp32_current_frame = frame.copy()
+                        esp32_boxes = temp_boxes
             time.sleep(0.01)
             
         except Exception as e:
             print(f"❌ [스트림 통합 에러] 시스템 예외 발생: {e}", file=sys.stderr)
-            if cap is not None:
-                try: cap.release()
-                except: pass
-                cap = None
-            time.sleep(1)
+            if global_esp_cap is not None: 
+                global_esp_cap.release()
+            
+            # 🌟 [핵심 버그 완치선] 예외 발생 후 재시도 루프를 돌기 직전, 
+            # 모드가 꺼졌다면 미련하게 다시 찌르지 말고 즉시 break로 루프를 깨부숩니다!
+            if not esp_mode_active or not is_running:
+                break
+            time.sleep(1.0)
+            
+    # 🌟 [최종 실링] while 루프를 탈출하면 안전하게 물리 포트를 release하고 스레드를 영구 증발 소멸시킵니다.
+    print("🛑 [스레드 완전 증발] ESP32 카메라 소켓을 강제 해제하고 스레드를 영원히 매장합니다.", file=sys.stderr)
+    if global_esp_cap is not None:
+        global_esp_cap.release()
+        global_esp_cap = None
 
 
-bg_thread = threading.Thread(target=esp32_video_stream_receiver, daemon=True)
-bg_thread.start()
+# 🌟 [주의] 파일 맨 아래에 선언되어 있던 bg_thread.start() 자동 실행 구문은 
+# 중복 가동 및 먹통 방지를 위해 과감하게 삭제하거나 주석 처리해 줍니다!
+# bg_thread = threading.Thread(target=esp32_video_stream_receiver, daemon=True)
+# bg_thread.start()
 
 def generate_esp32_frames_bridge():
     global esp32_current_frame, esp_mode_active
