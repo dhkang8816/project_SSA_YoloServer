@@ -210,6 +210,8 @@ def generate_esp32_frames_bridge():
             except:
                 pass
 
+
+
 @esp32_yolov12.route('/video_feed')
 def video_feed():
     return Response(generate_esp32_frames_bridge(), mimetype='multipart/x-mixed-replace; boundary=frame')

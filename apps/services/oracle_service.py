@@ -14,6 +14,7 @@ API_DANGER_REPORT = f"{SPRING_HOST}/yolo/api/report"
 # 공통 코드 스캔 경로 동기화 완료
 API_TARGETS = f"{SPRING_HOST}/yolo/api/targets"
 API_CODE_MAP = f"{SPRING_HOST}/yolo/api/code-map"
+CURRENT_ACTIVE_SOURCE = "video_1" 
 
 # 🌟 [신규 개설] 실시간 프레임을 로컬 하드디스크에 직접 저장하는 고속 엔진 함수
 def _save_physical_snapshot(frame, folder_name):
@@ -40,42 +41,51 @@ def _save_physical_snapshot(frame, folder_name):
         return "noImage.jpg"
 
 def send_log_to_oracle(animal_type, detect_count, reason, frame):
-    # 🎯 주소창을 기존 /yolo/api/report-log 에서 아래 주소로 교체!
     url = "http://localhost:80/project_ssa_spring/yolo/api/report-log"
-
     saved_file_name = _save_physical_snapshot(frame, "detection")
     
-    #  수신부 VO 클래스 필드명과 1:1 완벽 정밀 매칭 (오라클 DB snapshotPath 완벽 연동)
+    #  [인프라 대개통] 자바 백엔드 전역 캐시 서랍장을 가로채 현재 채널의 진짜 드론 ID 탈취
+    active_drone_id = "DRONE01" # 통신 실패 대비 디폴트 방어선
+    try:
+        mapping_url = "http://localhost:80/project_ssa_spring/yolo/currentMappings"
+        map_response = requests.get(mapping_url, timeout=1.0)
+        if map_response.status_code == 200:
+            mapping_data = map_response.json()
+            active_mappings = mapping_data.get("activeMappings", {})
+            # 전역 변수(CURRENT_ACTIVE_SOURCE)에 매핑된 진짜 드론 ID 획득
+            active_drone_id = active_mappings.get(CURRENT_ACTIVE_SOURCE, "DRONE01")
+            print(f"✈ [트랙A 동기화] 현재 채널 [{CURRENT_ACTIVE_SOURCE}] -> 지정 드론 [{active_drone_id}] 매핑 완수")
+    except Exception as e:
+        print(f"⚠ [매핑 통신 지연] 기본 DRONE01 대체 가동: {e}")
+
+    # 수신부 VO 클래스 필드명과 1:1 완벽 정밀 매칭
     payload = {
         "animalType": str(animal_type),
         "detectCount": int(detect_count),
-        "droneId": "DRONE01", # DB 외래키 제약조건 방어선용 필수 ID
+        
+        # ➔ [하드코딩 완전 철폐] 수동 문자열을 날려버리고 실시간 가로챈 동적 변수로 교체!
+        "droneId": active_drone_id, 
+        
         "actionStatus": "0",
         "actionReason": str(reason),
-        "snapshotPath": saved_file_name  # 🌟 캡처된 고유 파일명 주소 치환 적재
+        "snapshotPath": saved_file_name 
     }
     
-    # 🛡️ 401/415 에러를 원천 파괴하는 표준 API 통신 헤더 각인
     headers = {
         "Content-Type": "application/json; charset=UTF-8",
         "User-Agent": "Python-YOLO-Engine"
     }
     
     try:
-        # 💡 딕셔너리를 확실하게 규칙적인 JSON 스트링으로 패킹합니다.
         json_data = json.dumps(payload, ensure_ascii=False)
-        
-        # 💡 json=payload 대신 data=json_data를 사용하여 완전하게 밀어 넣습니다.
         response = requests.post(url, data=json_data.encode('utf-8'), headers=headers, timeout=3.0)
         
         if response.status_code == 200:
             print("✅ [오라클 통신 서비스] 정상 축종 미달 로그 스프링 전송 및 오라클 적재 최종 성공!")
         else:
             print(f"❌ [오라클 통신 서비스] 스프링 응답 에러 (코드: {response.status_code}, 내용: {response.text})")
-            
     except Exception as e:
         print(f"⚠[오라클 통신 서비스] 스프링 허브 연결 물리적 실패. 에러: {e}")
-
 
 def send_danger_log_to_oracle(danger_type, frame,drone_id="DRONE01"):
     """
