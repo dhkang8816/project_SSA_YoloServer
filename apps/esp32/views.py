@@ -20,6 +20,10 @@ from apps.services import yolo_detector
 # 30초 동안 미련하게 대기하지 말고 즉시 "연결 실패(False)"를 뱉고 루프를 탈출하게 만듭니다.
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "timeout;1000000"
 global_esp_cap = None
+_capture_lock = threading.Lock()
+_receiver_lock = threading.Lock()
+_receiver_thread = None
+_receiver_generation = 0
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 # 💡 스레드 함수 직전에 상태 감지용 플래그 전역 변수 하나 추가
@@ -38,8 +42,6 @@ esp32_boxes = []
 is_running = True
 esp_mode_active = False 
 frame_lock = threading.Lock() 
-
-os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;udp"
 
 @esp32_yolov12.route("/")
 def index():
@@ -68,10 +70,10 @@ def change_mode_signal(mode_name):
         yolo_detector.current_boxes = []
         print("[플라스크]  ESP32 라이브 모드 가동! 스레드 출격.", file=sys.stderr)
         
-        bg_thread = threading.Thread(target=esp32_video_stream_receiver, daemon=True)
-        bg_thread.start()
+        start_esp32_receiver()
         
     else:
+        stop_esp32_receiver()
         # 🌟 [치트키 발동] 사용자가 비디오 모드로 탈출하면 플래그만 바꾸는 게 아니라,
         # 백그라운드 스레드가 갇혀있는 global_esp_cap 자원을 여기서 직접 release()로 부수어버립니다!
         esp_mode_active = False
@@ -95,13 +97,13 @@ def change_mode_signal(mode_name):
     return jsonify({"status": "mode_changed"})
 
 
-def esp32_video_stream_receiver():
+def _legacy_esp32_video_stream_receiver():
     """백그라운드에서 무선 하드웨어 스트림을 수신해 YOLO 분석을 수행하는 엔진"""
     global esp32_current_frame, esp32_boxes, is_running, esp_mode_active, has_resetted, global_esp_cap
     print("[스레드 가동] 🚀 하드웨어 무선 수신 백그라운드 엔진 기동.", file=sys.stderr)
     
     model = YOLO("C:/project_team3/workspaces/project_SSA/runs/detect/my_yolov12_project/yolov8n_train-6/weights/best.pt")
-    full_url = "http://192.168.137.128:80/stream"
+    full_url = ESP32_STREAM_URL
     
     # 윈도우 환경 최적화를 위해 주입했던 CAP_FFMPEG 복귀
     global_esp_cap = cv2.VideoCapture(full_url, cv2.CAP_FFMPEG)
@@ -178,6 +180,145 @@ def esp32_video_stream_receiver():
 # 중복 가동 및 먹통 방지를 위해 과감하게 삭제하거나 주석 처리해 줍니다!
 # bg_thread = threading.Thread(target=esp32_video_stream_receiver, daemon=True)
 # bg_thread.start()
+
+def _is_receiver_active(generation):
+    return is_running and esp_mode_active and generation == _receiver_generation
+
+
+def _wait_while_active(generation, seconds):
+    """Make retry waits interruptible by a video-source change."""
+    deadline = time.monotonic() + seconds
+    while _is_receiver_active(generation) and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+
+def _open_esp_capture():
+    """Open one bounded FFMPEG connection to the HTTP MJPEG endpoint."""
+    properties = (
+        cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 1000,
+        cv2.CAP_PROP_READ_TIMEOUT_MSEC, 1000,
+    )
+    try:
+        cap = cv2.VideoCapture(ESP32_STREAM_URL, cv2.CAP_FFMPEG, properties)
+    except (TypeError, cv2.error):
+        # Older OpenCV builds do not support constructor properties. The FFMPEG
+        # timeout environment option set above is still applied in that case.
+        cap = cv2.VideoCapture(ESP32_STREAM_URL, cv2.CAP_FFMPEG)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    return cap
+
+
+def stop_esp32_receiver():
+    """Invalidate the receiver and release its socket immediately."""
+    global is_running, esp_mode_active, _receiver_generation, global_esp_cap
+    is_running = False
+    esp_mode_active = False
+    with _receiver_lock:
+        _receiver_generation += 1
+        receiver = _receiver_thread
+    with _capture_lock:
+        cap = global_esp_cap
+        global_esp_cap = None
+    if cap is not None:
+        cap.release()
+    # The FFMPEG open/read timeouts bound this wait. It prevents an immediate
+    # video -> ESP32 switch from creating a second socket while the old worker
+    # is still unwinding.
+    if receiver is not None and receiver is not threading.current_thread():
+        receiver.join(timeout=1.5)
+
+
+def start_esp32_receiver():
+    """Start at most one receiver. Repeated ESP32 clicks do not add threads."""
+    global is_running, esp_mode_active, _receiver_generation, _receiver_thread
+    with _receiver_lock:
+        is_running = True
+        esp_mode_active = True
+        if _receiver_thread is not None and _receiver_thread.is_alive():
+            return False
+        _receiver_generation += 1
+        generation = _receiver_generation
+        _receiver_thread = threading.Thread(
+            target=esp32_video_stream_receiver,
+            args=(generation,),
+            daemon=True,
+            name="esp32-video-receiver",
+        )
+        _receiver_thread.start()
+        return True
+
+
+def esp32_video_stream_receiver(generation=None):
+    """The sole ESP32 connection and YOLO consumer for one active generation."""
+    global esp32_current_frame, esp32_boxes, global_esp_cap
+    if generation is None:
+        # Compatibility for any legacy direct call site.
+        with _receiver_lock:
+            generation = _receiver_generation
+
+    model = YOLO("C:/project_team3/workspaces/project_SSA/runs/detect/my_yolov12_project/yolov8n_train-6/weights/best.pt")
+    cap = None
+    try:
+        while _is_receiver_active(generation):
+            cap = _open_esp_capture()
+            with _capture_lock:
+                if not _is_receiver_active(generation):
+                    cap.release()
+                    break
+                global_esp_cap = cap
+
+            if not cap.isOpened():
+                cap.release()
+                with _capture_lock:
+                    if global_esp_cap is cap:
+                        global_esp_cap = None
+                _wait_while_active(generation, 1.0)
+                continue
+
+            while _is_receiver_active(generation):
+                success, frame = cap.read()
+                if not success:
+                    break
+                results = model(frame, conf=0.5, verbose=False)
+                boxes = results[0].boxes if results else None
+                detected_names = []
+                temp_boxes = []
+                if boxes is not None:
+                    names = results[0].names
+                    for box in boxes:
+                        if box.conf.item() < 0.5:
+                            continue
+                        label = names[int(box.cls.item())]
+                        detected_names.append(label)
+                        coords = box.xyxy.tolist()[0]
+                        temp_boxes.append([
+                            coords[0], coords[1], coords[2] - coords[0],
+                            coords[3] - coords[1], label, float(box.conf.item()),
+                        ])
+                yolo_detector.process_animal_detection_logic(detected_names, frame)
+                with frame_lock:
+                    esp32_current_frame = frame.copy()
+                    esp32_boxes = temp_boxes
+
+            cap.release()
+            with _capture_lock:
+                if global_esp_cap is cap:
+                    global_esp_cap = None
+            cap = None
+            _wait_while_active(generation, 0.5)
+    except Exception as e:
+        print(f"[ESP32 receiver error] {e}", file=sys.stderr)
+    finally:
+        if cap is not None:
+            cap.release()
+        with _capture_lock:
+            if global_esp_cap is cap:
+                global_esp_cap = None
+        if generation == _receiver_generation:
+            with frame_lock:
+                esp32_current_frame = None
+                esp32_boxes = []
+
 
 def generate_esp32_frames_bridge():
     global esp32_current_frame, esp_mode_active

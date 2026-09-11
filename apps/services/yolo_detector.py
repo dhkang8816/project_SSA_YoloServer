@@ -103,7 +103,8 @@ def process_animal_detection_logic(detected_names, frame):  # 🌟 매개변수 
                         animal_type=code_id,
                         detect_count=current_count,
                         reason=f"AI 관제 시스템 실시간 분석 - {hangle_name} 보유 마리수 기준치 미달 현상 지속",
-                        frame=frame 
+                        frame=frame,
+                        source_key=oracle_service.CURRENT_ACTIVE_SOURCE,
                     )
         else:
             if under_target.get(code_id) is not None:
@@ -114,21 +115,29 @@ def process_animal_detection_logic(detected_names, frame):  # 🌟 매개변수 
                     recovery[code_id] = None
                     print(f"✅ [{eng_name}] 2.5초간 정상 수량 유지됨 -> 타이머 리셋.")
 
-    # -------------------------------------------------------------
-    # Part B. [최종 활성화] 위험 야생동물(이상객체) 출현 실시간 포착 벨트
-    # -------------------------------------------------------------
-    for danger_name in ["blue_alien", "blue_shark", "pink_dragon", "tiger"]:
-        if danger_name in detected_names:
-            code_id = YOLO_TO_CODE.get(danger_name)
-            if not code_id: continue
-            
-            if (current_time - last_alarm_time.get(code_id, 0)) >= ALARM_COOLDOWN:
-                last_alarm_time[code_id] = current_time
-                hangle_danger = ANIMAL_NAME_MAP.get(danger_name, danger_name)
-                print(f"🚨 [위험 이상객체 포착] 관제 구역 내 {hangle_danger} 출현 확인! 오라클 즉시 원격 적재 트리거 가동.")
+        # -------------------------------------------------------------
+        # Part B. 위험 야생동물(이상객체) 출현 실시간 포착 벨트 (기존 코드 7~8페이지)
+        # -------------------------------------------------------------
+        for danger_name in ["blue_alien", "blue_shark", "pink_dragon", "tiger"]:
+            if danger_name in detected_names:
+                code_id = YOLO_TO_CODE.get(danger_name)
+                if not code_id: continue
                 
-                # 🌟 [트랙 B 호출부 교체] 매개변수 순서 조율에 맞춰 danger_type 다음 자리에 frame=frame 주입!
-                oracle_service.send_danger_log_to_oracle(danger_type=code_id, frame=frame)
+                if (current_time - last_alarm_time.get(code_id, 0)) >= ALARM_COOLDOWN:
+                    last_alarm_time[code_id] = current_time
+                    hangle_danger = ANIMAL_NAME_MAP.get(danger_name, danger_name)
+                    print(f"🚨 [위험 이상객체 포착] 관제 구역 내 {hangle_danger} 출현 확인! 오라클 즉시 원격 적재 트리거 가동.")
+                    
+                    # 💡 [핵심 수정] 위험 객체 포착 시에도 실시간으로 진짜 드론 ID를 가로챕니다!
+                    current_real_drone_id = oracle_service.CURRENT_ACTIVE_SOURCE
+                    
+                    # 💡 [호출부 수정] 파라미터 맨 끝에 drone_id로 진짜 가로챈 ID를 확실하게 주입합니다.
+                    oracle_service.send_danger_log_to_oracle(
+                        danger_type=code_id, 
+                        frame=frame,
+                        drone_id=current_real_drone_id  # 👈 디폴트 'DRONE01'을 밀어내고 매핑된 ID 전송!
+                    )
+
 
 
 def change_ai_source_runtime(mode, path_or_url):
@@ -152,10 +161,19 @@ def video_capture_and_detect():
     while is_running:
         try:
             if source_changed:
-                cap.release()
-                cap = cv2.VideoCapture(current_source_path)
-                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                if cap is not None:
+                    cap.release()
+                cap = None
+                if current_mode != "esp32":
+                    cap = cv2.VideoCapture(current_source_path)
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 source_changed = False
+                continue
+
+            # ESP32 is captured and inferred only by apps.esp32.views.  Opening
+            # the URL here as well leaves an orphaned TCP retry loop on switches.
+            if current_mode == "esp32":
+                time.sleep(0.1)
                 continue
 
             if active_connections <= 0:

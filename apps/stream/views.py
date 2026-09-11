@@ -12,6 +12,8 @@ stream = Blueprint(
     static_folder="static",
 )
 
+ESP32_STREAM_URL = "http://192.168.137.128:80/stream"
+
 @stream.route("/")
 def index():
     # yolo_detector.init_ai_metadata_from_oracle()
@@ -78,8 +80,7 @@ def change_hybrid_source(source_key):
     if source_key in VIDEO_PATH_MAP or source_key != "esp32":
         # 1. 다른 파일에 분리되어 있던 esp32 수신 모듈의 러닝 스위치를 강제로 False로 꺼버립니다.
         from apps.esp32 import views as esp32_views
-        esp32_views.is_running = False
-        esp32_views.esp_mode_active = False
+        esp32_views.stop_esp32_receiver()
         
         # 2. 혹시 기존에 물려있던 프레임 버퍼가 남아있다면 깨끗하게 공백 청소
         yolo_detector.current_boxes = []
@@ -98,17 +99,12 @@ def change_hybrid_source(source_key):
         from apps.esp32 import views as esp32_views
         
         # 스레드 전원 스위치를 다시 싱싱하게 켜줍니다.
-        esp32_views.is_running = True
-        esp32_views.esp_mode_active = True
         esp32_views.has_resetted = False
         
         # 아두이노 기기 주소를 하이브리드 스트림으로 직결 주입
-        esp32_url = "http://192.168.137"
-        yolo_detector.change_ai_source_runtime("esp32", esp32_url)
+        yolo_detector.change_ai_source_runtime("esp32", None)
         
         #  [스레드 부활] 꺼져있던 스레드를 이 창구에서 직접 안전하게 새로 깨워서 출격시킵니다.
-        import threading
-        bg_thread = threading.Thread(target=esp32_views.esp32_video_stream_receiver, daemon=True)
-        bg_thread.start()
+        esp32_views.start_esp32_receiver()
         
         return jsonify({"status": "SUCCESS", "mode": "esp32"})

@@ -3,6 +3,8 @@ import uuid
 import cv2
 import requests
 import json
+import threading
+from queue import Queue, Full
 
 # 🎯 [아키텍처 최종 대개통] 포트 번호(:8080)를 명시하여 자바 톰캣 수신부와 완벽하게 일직선 연결!
 SPRING_HOST = "http://localhost:80/project_ssa_spring"
@@ -15,6 +17,7 @@ API_DANGER_REPORT = f"{SPRING_HOST}/yolo/api/report"
 API_TARGETS = f"{SPRING_HOST}/yolo/api/targets"
 API_CODE_MAP = f"{SPRING_HOST}/yolo/api/code-map"
 CURRENT_ACTIVE_SOURCE = "video_1" 
+_report_queue = Queue(maxsize=100)
 
 # 🌟 [신규 개설] 실시간 프레임을 로컬 하드디스크에 직접 저장하는 고속 엔진 함수
 def _save_physical_snapshot(frame, folder_name):
@@ -40,23 +43,52 @@ def _save_physical_snapshot(frame, folder_name):
         print(f"❌ [자가캡처 실패] 기본 이미지 복사 중 시스템 예외 발생: {e}")
         return "noImage.jpg"
 
-def send_log_to_oracle(animal_type, detect_count, reason, frame):
-    url = "http://localhost:80/project_ssa_spring/yolo/api/report-log"
-    saved_file_name = _save_physical_snapshot(frame, "detection")
-    
-    #  [인프라 대개통] 자바 백엔드 전역 캐시 서랍장을 가로채 현재 채널의 진짜 드론 ID 탈취
-    active_drone_id = "DRONE01" # 통신 실패 대비 디폴트 방어선
+def get_active_drone_id(source_key=None):
+    active_drone_id = "DRONE01" # 최종 통신 실패 대비 방어선
     try:
         mapping_url = "http://localhost:80/project_ssa_spring/yolo/currentMappings"
         map_response = requests.get(mapping_url, timeout=1.0)
+        
         if map_response.status_code == 200:
             mapping_data = map_response.json()
-            active_mappings = mapping_data.get("activeMappings", {})
-            # 전역 변수(CURRENT_ACTIVE_SOURCE)에 매핑된 진짜 드론 ID 획득
-            active_drone_id = active_mappings.get(CURRENT_ACTIVE_SOURCE, "DRONE01")
-            print(f"✈ [트랙A 동기화] 현재 채널 [{CURRENT_ACTIVE_SOURCE}] -> 지정 드론 [{active_drone_id}] 매핑 완수")
+            
+            # 🔍 [디버깅 핵심] 자바 서버가 실제로 보내온 날것의 JSON 데이터를 콘솔에 출력합니다.
+            print(f"📡 [자바 서버 응답 원본]: {mapping_data}")
+            
+            # 💡 [구조 방어벽] activeMappings 키가 있으면 쓰고, 없으면 데이터 전체를 대상으로 탐색
+            if isinstance(mapping_data, dict):
+                active_mappings = mapping_data.get("activeMappings", mapping_data)
+                
+                # 만약 active_mappings마저 또 dict 형태라면 진짜 ID 추출 시도
+                if isinstance(active_mappings, dict):
+                    requested_source = source_key or CURRENT_ACTIVE_SOURCE
+                    active_drone_id = active_mappings.get(requested_source, "DRONE01")
+            
+            print(f"✈ [매핑 결과] 채널 [{CURRENT_ACTIVE_SOURCE}] -> 가로챈 드론 [{active_drone_id}]")
+        else:
+            print(f"❌ [매핑 서버 응답 에러] HTTP 상태 코드: {map_response.status_code}")
+            
     except Exception as e:
-        print(f"⚠ [매핑 통신 지연] 기본 DRONE01 대체 가동: {e}")
+        print(f"⚠ [매핑 통신 폭발/지연] 기본 DRONE01 대체 가동. 에러 원인: {e}")
+        
+    return active_drone_id
+
+
+def _send_log_to_oracle(animal_type, detect_count, reason, frame, source_key):
+    url = API_REPORT
+    saved_file_name = _save_physical_snapshot(frame, "detection")
+    
+    # 💡 분리한 공통 함수 호출로 동적 ID 획득
+    active_drone_id = get_active_drone_id(source_key)
+    
+    payload = {
+        "animalType": str(animal_type),
+        "detectCount": int(detect_count),
+        "droneId": active_drone_id,  # 동적 변수 반영
+        "actionStatus": "0",
+        "actionReason": str(reason),
+        "snapshotPath": saved_file_name
+    }
 
     # 수신부 VO 클래스 필드명과 1:1 완벽 정밀 매칭
     payload = {
@@ -87,7 +119,7 @@ def send_log_to_oracle(animal_type, detect_count, reason, frame):
     except Exception as e:
         print(f"⚠[오라클 통신 서비스] 스프링 허브 연결 물리적 실패. 에러: {e}")
 
-def send_danger_log_to_oracle(danger_type, frame,drone_id="DRONE01"):
+def _send_danger_log_to_oracle(danger_type, frame, source_key):
     """
     [트랙 B: 위험 이상객체 실시간 원격 적재 엔진]
     YOLO가 포착한 진짜 이상객체 영문 레이블 정보를 자바 수신 컨트롤러로 하이패스 송출합니다.
@@ -96,6 +128,8 @@ def send_danger_log_to_oracle(danger_type, frame,drone_id="DRONE01"):
     # 🌟 인서트 가동 직전 물리 캡처 실행 및 파일명 추출
     saved_file_name = _save_physical_snapshot(frame, "dangerlog")
 
+    active_drone_id = get_active_drone_id(source_key)
+    drone_id = active_drone_id
     payload = {
         "dangerType": int(danger_type),    # 외계인(2), 상어(3), 용(4), 호랑이(5)
         "dactionStatus": "0",              # 최초 포착 시 기본값 '0'(미확인) 적재 규칙 이행
@@ -122,6 +156,53 @@ def send_danger_log_to_oracle(danger_type, frame,drone_id="DRONE01"):
 
 
 # 기존에 더미로 남아있던 코드 맵 호출 함수 호환성 유지용 마감
+def _report_worker():
+    """Run blocking snapshot and Spring HTTP work outside the YOLO loop."""
+    while True:
+        report_type, payload = _report_queue.get()
+        try:
+            if report_type == "normal":
+                _send_log_to_oracle(**payload)
+            elif report_type == "danger":
+                _send_danger_log_to_oracle(**payload)
+        except Exception as e:
+            print(f"[Spring report worker error] {e}")
+        finally:
+            _report_queue.task_done()
+
+
+def _enqueue_report(report_type, payload):
+    try:
+        _report_queue.put_nowait((report_type, payload))
+        return True
+    except Full:
+        print("[Spring report queue full] event skipped")
+        return False
+
+
+def send_log_to_oracle(animal_type, detect_count, reason, frame, source_key=None):
+    """Schedule a normal event without blocking the detection thread."""
+    return _enqueue_report("normal", {
+        "animal_type": animal_type,
+        "detect_count": detect_count,
+        "reason": reason,
+        "frame": frame.copy() if frame is not None else None,
+        "source_key": source_key or CURRENT_ACTIVE_SOURCE,
+    })
+
+
+def send_danger_log_to_oracle(danger_type, frame, source_key=None, drone_id=None):
+    """Schedule a danger event without blocking the detection thread."""
+    return _enqueue_report("danger", {
+        "danger_type": danger_type,
+        "frame": frame.copy() if frame is not None else None,
+        "source_key": source_key or drone_id or CURRENT_ACTIVE_SOURCE,
+    })
+
+
+threading.Thread(target=_report_worker, name="spring-report-worker", daemon=True).start()
+
+
 def fetch_code_map():
     return {"dog": "개", "cat": "고양이", "blue_alien": "외계인", "blue_shark": "상어", "pink_dragon": "용", "tiger": "호랑이"}
 
