@@ -5,6 +5,7 @@ from ultralytics import YOLO
 from apps.services import oracle_service
 from apps.services import notifier
 import os
+from apps import runtime_settings
 
 
 current_frame = None
@@ -14,7 +15,7 @@ is_running = True
 
 # 하이브리드 제어권 상태 변수셋
 current_mode = "video" 
-current_source_path = "C:/project_team3/workspaces/project_SSA/videos/streaming_0.mp4"
+current_source_path = runtime_settings.VIDEO_PATHS["video_1"]
 source_changed = False
 
 # 🔗 [아키텍처 통합] 축종 코드와 이상객체 코드를 오라클 DB 공통코드 규칙과 1:1로 일치시킵니다.
@@ -26,6 +27,9 @@ YOLO_TO_CODE = {
     "pink_dragon": "4",  # 🚨 이상 객체 3번: 용 (오라클 CODE '4'번 매핑)
     "tiger": "5"         # 🚨 이상 객체 4번: 호랑이 (오라클 CODE '5'번 매핑)
 }
+
+ANIMAL_LABELS = ("dog", "cat")
+DANGER_LABELS = ("blue_alien", "blue_shark", "pink_dragon", "tiger")
 
 ANIMAL_NAME_MAP = {}
 
@@ -51,7 +55,10 @@ if 'recovery_start_time' not in globals():
 if 'last_alarm_time' not in globals():
     globals()['last_alarm_time'] = {"0": 0, "1": 0, "2": 0, "3": 0, "4": 0, "5": 0}
 
-ALARM_COOLDOWN = 10.0
+# Keep target codes JSON-compatible and consistent with timer-state keys.
+TARGET_ANIMALS = {str(code_id): int(count) for code_id, count in TARGET_ANIMALS.items()}
+
+ALARM_COOLDOWN = runtime_settings.ALARM_COOLDOWN_SECONDS
 
 def init_ai_metadata_from_oracle():
     global ANIMAL_NAME_MAP, TARGET_ANIMALS, program_start_time
@@ -65,7 +72,6 @@ def init_ai_metadata_from_oracle():
         # 이 처리를 해야만 아래 logic 함수에서 .get() 할 때 0을 반환하지 않고 정상 작동합니다.
         updated_targets = {}
         for k, v in raw_targets.items():
-            updated_targets[int(k)] = int(v)
             updated_targets[str(k)] = int(v)
             
         TARGET_ANIMALS = updated_targets
@@ -82,18 +88,18 @@ def process_animal_detection_logic(detected_names, frame):  # 🌟 매개변수 
     recovery = globals()['recovery_start_time']
     current_time = time.time()
     
-    for eng_name in ["dog", "cat"]:
+    for eng_name in ANIMAL_LABELS:
         code_id = YOLO_TO_CODE.get(eng_name)
         if not code_id: continue
         
-        target_count = int(TARGET_ANIMALS.get(int(code_id), TARGET_ANIMALS.get(str(code_id), 0)))
+        target_count = int(TARGET_ANIMALS.get(code_id, 0))
         current_count = detected_names.count(eng_name)
         
         if current_count < target_count:
             recovery[code_id] = None
             if under_target.get(code_id) is None:
                 under_target[code_id] = current_time
-            elif (current_time - under_target[code_id]) >= 10.0:
+            elif (current_time - under_target[code_id]) >= runtime_settings.ANIMAL_UNDER_TARGET_SECONDS:
                 if (current_time - last_alarm_time.get(code_id, 0)) >= ALARM_COOLDOWN:
                     last_alarm_time[code_id] = current_time
                     hangle_name = ANIMAL_NAME_MAP.get(eng_name, eng_name)
@@ -110,7 +116,7 @@ def process_animal_detection_logic(detected_names, frame):  # 🌟 매개변수 
             if under_target.get(code_id) is not None:
                 if recovery.get(code_id) is None:
                     recovery[code_id] = current_time
-                elif (current_time - recovery[code_id]) >= 2.5:
+                elif (current_time - recovery[code_id]) >= runtime_settings.ANIMAL_RECOVERY_SECONDS:
                     under_target[code_id] = None
                     recovery[code_id] = None
                     print(f"✅ [{eng_name}] 2.5초간 정상 수량 유지됨 -> 타이머 리셋.")
@@ -118,7 +124,8 @@ def process_animal_detection_logic(detected_names, frame):  # 🌟 매개변수 
         # -------------------------------------------------------------
         # Part B. 위험 야생동물(이상객체) 출현 실시간 포착 벨트 (기존 코드 7~8페이지)
         # -------------------------------------------------------------
-        for danger_name in ["blue_alien", "blue_shark", "pink_dragon", "tiger"]:
+        # Retained as inactive compatibility code until legacy-path cleanup.
+        for danger_name in ():
             if danger_name in detected_names:
                 code_id = YOLO_TO_CODE.get(danger_name)
                 if not code_id: continue
@@ -140,6 +147,37 @@ def process_animal_detection_logic(detected_names, frame):  # 🌟 매개변수 
 
 
 
+def process_danger_detection_logic(detected_names, frame):
+    """Evaluate danger objects once per frame and send an allowed event."""
+    global last_alarm_time
+    current_time = time.time()
+
+    for danger_name in DANGER_LABELS:
+        if danger_name not in detected_names:
+            continue
+
+        code_id = YOLO_TO_CODE.get(danger_name)
+        if not code_id:
+            continue
+        if (current_time - last_alarm_time.get(code_id, 0)) < ALARM_COOLDOWN:
+            continue
+
+        last_alarm_time[code_id] = current_time
+        hangle_danger = ANIMAL_NAME_MAP.get(danger_name, danger_name)
+        print(f"[DANGER] {hangle_danger} detected")
+        oracle_service.send_danger_log_to_oracle(
+            danger_type=code_id,
+            frame=frame,
+            drone_id=oracle_service.CURRENT_ACTIVE_SOURCE,
+        )
+
+
+def process_detection_events(detected_names, frame):
+    """Run the independent animal and danger event policies for one frame."""
+    process_animal_detection_logic(detected_names, frame)
+    process_danger_detection_logic(detected_names, frame)
+
+
 def change_ai_source_runtime(mode, path_or_url):
     global current_mode, current_source_path, source_changed
     current_mode = mode
@@ -152,7 +190,7 @@ def video_capture_and_detect():
     
     # 🎯 프로젝트 실물 custom 가중치 파일 경로 사수
     # 문자열을 쪼개지 말고 반드시 이렇게 깔끔하게 한 줄로 작성하셔야 합니다.
-    model = YOLO("C:/project_team3/workspaces/project_SSA/runs/detect/my_yolov12_project/yolov8n_train-6/weights/best.pt")
+    model = YOLO(runtime_settings.YOLO_MODEL_PATH)
 
     cap = cv2.VideoCapture(current_source_path)
 
@@ -189,7 +227,7 @@ def video_capture_and_detect():
                 continue
 
             # 1. YOLOv8 고속 추론 가동
-            results = model(frame, conf=0.50, verbose=False)
+            results = model(frame, conf=runtime_settings.YOLO_CONFIDENCE, verbose=False)
             
             # 🎯 [UnboundLocalError 완벽 박멸 복원] 주머니 변수 상자를 먼저 깨끗하게 개설합니다.
             detected_names = []
@@ -201,7 +239,7 @@ def video_capture_and_detect():
 
                 if boxes is not None and len(boxes) > 0:
                     for box in boxes:
-                        if box.conf.item() >= 0.50:
+                        if box.conf.item() >= runtime_settings.YOLO_CONFIDENCE:
                             # 2차원 리스트 대괄호 연산 오류 완치 파싱 완료
                             xyxy_list = box.xyxy.tolist()[0]
                             rx = xyxy_list[0]
@@ -229,7 +267,7 @@ def video_capture_and_detect():
                 
             # 🎯 [대통합 개통] 이제 detected_names 안에 ['pink_dragon', 'dog']가 꽉 차서 
             # 타이머 변수셋 내부로 드디어 신호탄이 정상 수급 및 점화됩니다!
-            process_animal_detection_logic(detected_names, current_frame)
+            process_detection_events(detected_names, current_frame)
             
             time.sleep(0.03)
         except Exception as e:

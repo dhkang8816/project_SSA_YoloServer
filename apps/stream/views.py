@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 from flask import Blueprint, Response, render_template, jsonify
 from apps.services import yolo_detector,oracle_service
+from apps import runtime_settings
 
 
 stream = Blueprint(
@@ -12,7 +13,7 @@ stream = Blueprint(
     static_folder="static",
 )
 
-ESP32_STREAM_URL = "http://192.168.137.128:80/stream"
+ESP32_STREAM_URL = runtime_settings.ESP32_STREAM_URL
 
 @stream.route("/")
 def index():
@@ -63,11 +64,7 @@ def change_hybrid_source(source_key):
     """
     [마스터 통합 제어기] 동영상 1,2,3번 및 ESP32 드론 캠 스위칭 허브 (동적 드론 매핑 완치 버전)
     """
-    VIDEO_PATH_MAP = {
-        "video_1" : "C:/project_team3/workspaces/project_SSA/videos/streaming_0.mp4",
-        "video_2" : "C:/project_team3/workspaces/project_SSA/videos/streaming_1.mp4",
-        "video_3" : "C:/project_team3/workspaces/project_SSA/videos/streaming_2.mp4"
-    }
+    VIDEO_PATH_MAP = runtime_settings.VIDEO_PATHS
     
     # ================================================================
     # ★ [버그 완치 핵심 주입선] 파이썬 서비스 파일의 전역 변수를 실시간 갱신합니다.

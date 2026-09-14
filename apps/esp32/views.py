@@ -13,12 +13,15 @@ import os
 # 🎯 오라클 통신 서비스 및 YOLO 전역 엔진 완벽 연동
 from apps.services import oracle_service
 from apps.services import yolo_detector
+from apps import runtime_settings
 
 # 🌟 [OpenCV 좀비 락 원천 폭파선]
 # 파이썬 OpenCV 라이브러리의 밑단 네트워크 코어(FFmpeg)에 환경 변수를 강제 각인시킵니다.
 # ESP32 기기가 꺼져서 패킷 지연이 1초(1000000 마이크로초)를 넘어가는 순간,
 # 30초 동안 미련하게 대기하지 말고 즉시 "연결 실패(False)"를 뱉고 루프를 탈출하게 만듭니다.
-os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "timeout;1000000"
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
+    f"timeout;{runtime_settings.ESP32_CAPTURE_TIMEOUT_MS * 1000}"
+)
 global_esp_cap = None
 _capture_lock = threading.Lock()
 _receiver_lock = threading.Lock()
@@ -36,7 +39,7 @@ esp32_yolov12 = Blueprint(
     static_folder="static",
 )
 
-ESP32_STREAM_URL = "http://192.168.137.128:80/stream"
+ESP32_STREAM_URL = runtime_settings.ESP32_STREAM_URL
 esp32_current_frame = None 
 esp32_boxes = [] 
 is_running = True
@@ -102,12 +105,12 @@ def _legacy_esp32_video_stream_receiver():
     global esp32_current_frame, esp32_boxes, is_running, esp_mode_active, has_resetted, global_esp_cap
     print("[스레드 가동] 🚀 하드웨어 무선 수신 백그라운드 엔진 기동.", file=sys.stderr)
     
-    model = YOLO("C:/project_team3/workspaces/project_SSA/runs/detect/my_yolov12_project/yolov8n_train-6/weights/best.pt")
+    model = YOLO(runtime_settings.YOLO_MODEL_PATH)
     full_url = ESP32_STREAM_URL
     
     # 윈도우 환경 최적화를 위해 주입했던 CAP_FFMPEG 복귀
     global_esp_cap = cv2.VideoCapture(full_url, cv2.CAP_FFMPEG)
-    global_esp_cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 1000) # 1초 강제 타임아웃
+    global_esp_cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, runtime_settings.ESP32_CAPTURE_TIMEOUT_MS)
     global_esp_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     
     while is_running and esp_mode_active:
@@ -124,7 +127,7 @@ def _legacy_esp32_video_stream_receiver():
                 if not esp_mode_active or not is_running: break
                 
                 global_esp_cap = cv2.VideoCapture(full_url, cv2.CAP_FFMPEG)
-                global_esp_cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 1000)
+                global_esp_cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, runtime_settings.ESP32_CAPTURE_TIMEOUT_MS)
                 continue
             
             success, frame = global_esp_cap.read()
@@ -136,21 +139,21 @@ def _legacy_esp32_video_stream_receiver():
                 if not esp_mode_active or not is_running: break
                 
                 global_esp_cap = cv2.VideoCapture(full_url, cv2.CAP_FFMPEG)
-                global_esp_cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 1000)
+                global_esp_cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, runtime_settings.ESP32_CAPTURE_TIMEOUT_MS)
                 continue
             
             # YOLO 추론 구간 (기존 로직 보존)
             if frame is not None and isinstance(frame, np.ndarray) and len(frame.shape) == 3:
-                results = model(frame, conf=0.5, verbose=False)
+                results = model(frame, conf=runtime_settings.YOLO_CONFIDENCE, verbose=False)
                 temp_boxes = []
                 if results and len(results) > 0 and results.boxes is not None:
                     boxes_obj = results.boxes
                     detected_names = [model.names[int(box.cls.item())] for box in boxes_obj]
                     
-                    yolo_detector.process_animal_detection_logic(detected_names, frame)
+                    yolo_detector.process_detection_events(detected_names, frame)
                     
                     for box in boxes_obj:
-                        if box.conf is not None and box.conf.item() >= 0.50:
+                        if box.conf is not None and box.conf.item() >= runtime_settings.YOLO_CONFIDENCE:
                             coords = box.xyxy.tolist()[0]
                             temp_boxes.append([coords[0], coords[1], coords[2]-coords[0], coords[3]-coords[1], model.names[int(box.cls.item())], float(box.conf.item())])
                     with frame_lock:
@@ -195,8 +198,8 @@ def _wait_while_active(generation, seconds):
 def _open_esp_capture():
     """Open one bounded FFMPEG connection to the HTTP MJPEG endpoint."""
     properties = (
-        cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 1000,
-        cv2.CAP_PROP_READ_TIMEOUT_MSEC, 1000,
+        cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, runtime_settings.ESP32_CAPTURE_TIMEOUT_MS,
+        cv2.CAP_PROP_READ_TIMEOUT_MSEC, runtime_settings.ESP32_CAPTURE_TIMEOUT_MS,
     )
     try:
         cap = cv2.VideoCapture(ESP32_STREAM_URL, cv2.CAP_FFMPEG, properties)
@@ -225,7 +228,7 @@ def stop_esp32_receiver():
     # video -> ESP32 switch from creating a second socket while the old worker
     # is still unwinding.
     if receiver is not None and receiver is not threading.current_thread():
-        receiver.join(timeout=1.5)
+        receiver.join(timeout=runtime_settings.ESP32_RECEIVER_JOIN_TIMEOUT_SECONDS)
 
 
 def start_esp32_receiver():
@@ -256,7 +259,7 @@ def esp32_video_stream_receiver(generation=None):
         with _receiver_lock:
             generation = _receiver_generation
 
-    model = YOLO("C:/project_team3/workspaces/project_SSA/runs/detect/my_yolov12_project/yolov8n_train-6/weights/best.pt")
+    model = YOLO(runtime_settings.YOLO_MODEL_PATH)
     cap = None
     try:
         while _is_receiver_active(generation):
@@ -279,14 +282,14 @@ def esp32_video_stream_receiver(generation=None):
                 success, frame = cap.read()
                 if not success:
                     break
-                results = model(frame, conf=0.5, verbose=False)
+                results = model(frame, conf=runtime_settings.YOLO_CONFIDENCE, verbose=False)
                 boxes = results[0].boxes if results else None
                 detected_names = []
                 temp_boxes = []
                 if boxes is not None:
                     names = results[0].names
                     for box in boxes:
-                        if box.conf.item() < 0.5:
+                        if box.conf.item() < runtime_settings.YOLO_CONFIDENCE:
                             continue
                         label = names[int(box.cls.item())]
                         detected_names.append(label)
@@ -295,7 +298,7 @@ def esp32_video_stream_receiver(generation=None):
                             coords[0], coords[1], coords[2] - coords[0],
                             coords[3] - coords[1], label, float(box.conf.item()),
                         ])
-                yolo_detector.process_animal_detection_logic(detected_names, frame)
+                yolo_detector.process_detection_events(detected_names, frame)
                 with frame_lock:
                     esp32_current_frame = frame.copy()
                     esp32_boxes = temp_boxes

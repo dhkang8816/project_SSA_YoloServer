@@ -5,17 +5,21 @@ import requests
 import json
 import threading
 from queue import Queue, Full
+from apps import runtime_settings
 
 # 🎯 [아키텍처 최종 대개통] 포트 번호(:8080)를 명시하여 자바 톰캣 수신부와 완벽하게 일직선 연결!
-SPRING_HOST = "http://localhost:80/project_ssa_spring"
+SPRING_HOST = runtime_settings.SPRING_HOST
 
 # 🔗 독립 개설한 자바 수신 컨트롤러(YoloApiReceiverController)의 주소 체계와 100% 싱크 매핑
 API_REPORT = f"{SPRING_HOST}/yolo/api/report-log"
 API_DANGER_REPORT = f"{SPRING_HOST}/yolo/api/report"
 
 # 공통 코드 스캔 경로 동기화 완료
-API_TARGETS = f"{SPRING_HOST}/yolo/api/targets"
-API_CODE_MAP = f"{SPRING_HOST}/yolo/api/code-map"
+API_TARGETS = f"{SPRING_HOST}/api/v1/ai/targets"
+API_CODE_MAP = f"{SPRING_HOST}/api/v1/ai/code-map"
+METADATA_REQUEST_TIMEOUT = runtime_settings.METADATA_REQUEST_TIMEOUT_SECONDS
+FALLBACK_TARGET_COUNTS = {"0": 2, "1": 1}
+FALLBACK_CODE_MAP = {"0": "개", "1": "고양이"}
 CURRENT_ACTIVE_SOURCE = "video_1" 
 _report_queue = Queue(maxsize=100)
 
@@ -27,7 +31,7 @@ def _save_physical_snapshot(frame, folder_name):
     
     try:
         # 1. 독립 물리 경로 디렉토리 경로 추출 (C:\upload\detection 또는 C:\upload\dangerlog)
-        upload_path = os.path.join("C:\\", "upload", folder_name)
+        upload_path = os.path.join(runtime_settings.UPLOAD_ROOT, folder_name)
         if not os.path.exists(upload_path):
             os.makedirs(upload_path) # 폴더 자동 생성(상위 폴더 포함)
             
@@ -46,8 +50,8 @@ def _save_physical_snapshot(frame, folder_name):
 def get_active_drone_id(source_key=None):
     active_drone_id = "DRONE01" # 최종 통신 실패 대비 방어선
     try:
-        mapping_url = "http://localhost:80/project_ssa_spring/yolo/currentMappings"
-        map_response = requests.get(mapping_url, timeout=1.0)
+        mapping_url = f"{SPRING_HOST}/yolo/currentMappings"
+        map_response = requests.get(mapping_url, timeout=runtime_settings.MAPPING_REQUEST_TIMEOUT_SECONDS)
         
         if map_response.status_code == 200:
             mapping_data = map_response.json()
@@ -110,7 +114,12 @@ def _send_log_to_oracle(animal_type, detect_count, reason, frame, source_key):
     
     try:
         json_data = json.dumps(payload, ensure_ascii=False)
-        response = requests.post(url, data=json_data.encode('utf-8'), headers=headers, timeout=3.0)
+        response = requests.post(
+            url,
+            data=json_data.encode('utf-8'),
+            headers=headers,
+            timeout=runtime_settings.EVENT_REQUEST_TIMEOUT_SECONDS,
+        )
         
         if response.status_code == 200:
             print("✅ [오라클 통신 서비스] 정상 축종 미달 로그 스프링 전송 및 오라클 적재 최종 성공!")
@@ -143,7 +152,12 @@ def _send_danger_log_to_oracle(danger_type, frame, source_key):
         #  새로 만든 자바 독립 컨트롤러(YoloApiReceiverController)의 직통 대문을 정밀 타격합니다.
         # 기존 누락 오류를 완전히 원천 방어하고자 확실히 바인딩 인코딩 처리 처리 송출
         json_data = json.dumps(payload, ensure_ascii=False)
-        response = requests.post(API_DANGER_REPORT, data=json_data.encode('utf-8'), headers=headers, timeout=3.0)
+        response = requests.post(
+            API_DANGER_REPORT,
+            data=json_data.encode('utf-8'),
+            headers=headers,
+            timeout=runtime_settings.EVENT_REQUEST_TIMEOUT_SECONDS,
+        )
         if response.status_code == 200:
             print(f"🚀 [오라클 통신 서비스] 위험 이상객체 실시간 로그 스프링 적재 성공 완료!")
             return True
@@ -203,8 +217,39 @@ def send_danger_log_to_oracle(danger_type, frame, source_key=None, drone_id=None
 threading.Thread(target=_report_worker, name="spring-report-worker", daemon=True).start()
 
 
+def _fetch_metadata(url, fallback, value_normalizer):
+    """Fetch a metadata map from Spring, using a local copy only on failure."""
+    try:
+        response = requests.get(url, timeout=METADATA_REQUEST_TIMEOUT)
+        response.raise_for_status()
+        metadata = response.json()
+        if not isinstance(metadata, dict) or not metadata:
+            raise ValueError("metadata response must be a non-empty JSON object")
+        return {str(key): value_normalizer(value) for key, value in metadata.items()}
+    except (requests.RequestException, TypeError, ValueError) as error:
+        print(f"[AI metadata fallback] {error}")
+        return fallback.copy()
+
+
+def _normalize_target_count(value):
+    if isinstance(value, bool):
+        raise ValueError("target count must be an integer")
+    count = int(value)
+    if count < 0:
+        raise ValueError("target count must not be negative")
+    return count
+
+
+def _normalize_code_name(value):
+    name = str(value).strip()
+    if not name:
+        raise ValueError("code name must not be empty")
+    return name
+
+
 def fetch_code_map():
-    return {"dog": "개", "cat": "고양이", "blue_alien": "외계인", "blue_shark": "상어", "pink_dragon": "용", "tiger": "호랑이"}
+    return _fetch_metadata(API_CODE_MAP, FALLBACK_CODE_MAP, _normalize_code_name)
+
 
 def fetch_target_counts():
-    return {"0": 2, "1": 1} # 개 2마리, 고양이 1마리 기본 목표치 버퍼 리턴
+    return _fetch_metadata(API_TARGETS, FALLBACK_TARGET_COUNTS, _normalize_target_count)
