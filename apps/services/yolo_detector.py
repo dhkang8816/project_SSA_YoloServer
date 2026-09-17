@@ -46,7 +46,7 @@ program_start_time = None
 current_frame = None
 current_boxes = []
 active_connections = 0
-is_running = True
+is_running = False
 current_mode = "video"
 current_source_path = runtime_settings.VIDEO_PATHS["video_1"]
 source_changed = False
@@ -247,6 +247,7 @@ class SourceWorker:
             return True
 
     def stop(self, join_timeout=None):
+        """Request a stop and return True only after the worker has exited."""
         self.stop_event.set()
         with self.capture_lock:
             capture = self.capture
@@ -255,7 +256,14 @@ class SourceWorker:
             capture.release()
         thread = self.thread
         if thread is not None and thread is not threading.current_thread():
-            thread.join(join_timeout or runtime_settings.ESP32_RECEIVER_JOIN_TIMEOUT_SECONDS)
+            thread.join(
+                join_timeout or runtime_settings.SOURCE_WORKER_STOP_TIMEOUT_SECONDS
+            )
+        with self.frame_lock:
+            self.latest_frame = None
+            self.latest_boxes = []
+            self.last_frame_at = None
+        return thread is None or not thread.is_alive()
 
     def snapshot_frame(self):
         with self.frame_lock:
@@ -266,9 +274,14 @@ class SourceWorker:
             return list(self.latest_boxes)
 
     def status(self):
+        thread = self.thread
+        thread_alive = thread is not None and thread.is_alive()
+        stopping = thread_alive and self.stop_event.is_set()
         with self.frame_lock:
             return {
-                "running": self.thread is not None and self.thread.is_alive() and not self.stop_event.is_set(),
+                "running": thread_alive and not stopping,
+                "stopping": stopping,
+                "stopped": not thread_alive,
                 "frame_ready": self.latest_frame is not None,
                 "last_frame_at": self.last_frame_at,
                 "frame_sequence": self.frame_sequence,
@@ -349,7 +362,11 @@ class SourceWorker:
                         break
                     try:
                         annotated_frame, detected_names, boxes = _run_inference(frame)
+                        if self.stop_event.is_set():
+                            break
                         process_detection_events(detected_names, annotated_frame, self.source_key)
+                        if self.stop_event.is_set():
+                            break
                         self._publish(annotated_frame, boxes)
                     except Exception as error:
                         self._set_error(error)
@@ -394,31 +411,46 @@ def get_default_source_key():
 
 
 def start_source_worker(source_key):
+    global is_running
     worker = _workers.get(source_key)
     if worker is None:
         return False
+    is_running = True
     worker.start()
-    return True
+    return worker.status()["running"]
 
 
 def stop_source_worker(source_key):
+    global current_frame, current_boxes, is_running
     worker = _workers.get(source_key)
     if worker is None:
         return False
-    worker.stop()
-    return True
+    stopped = worker.stop()
+    if source_key == get_default_source_key():
+        with _legacy_state_lock:
+            current_frame = None
+            current_boxes = []
+    is_running = any(status["running"] for status in get_source_status().values())
+    return stopped
 
 
 def start_all_workers():
+    global is_running
+    is_running = True
     for source_key in get_source_keys():
         start_source_worker(source_key)
+    return get_source_status()
 
 
 def stop_all_workers():
-    global is_running
+    global is_running, current_frame, current_boxes
     is_running = False
     for worker in tuple(_workers.values()):
         worker.stop()
+    with _legacy_state_lock:
+        current_frame = None
+        current_boxes = []
+    return get_source_status()
 
 
 def set_default_source(source_key):
@@ -450,7 +482,6 @@ def get_latest_frame(source_key=None):
     worker = _workers.get(source_key)
     if worker is None:
         return None
-    worker.start()
     return worker.snapshot_frame()
 
 
@@ -459,7 +490,6 @@ def get_latest_boxes(source_key=None):
     worker = _workers.get(source_key)
     if worker is None:
         return []
-    worker.start()
     return worker.snapshot_boxes()
 
 
@@ -495,8 +525,10 @@ def video_capture_and_detect():
     start_all_workers()
 
 
-# The former single worker is intentionally not started. Per-source workers are
-# eager-started below, preserving the old detector module's startup behaviour.
+# The former single worker is intentionally not started. The default is also
+# deliberately OFF for every source; the Spring console's ON switch owns
+# startup. An environment setting is available only for unattended operation.
 ai_thread = None
-start_all_workers()
+if runtime_settings.AUTO_START_DETECTION_WORKERS:
+    start_all_workers()
 atexit.register(stop_all_workers)

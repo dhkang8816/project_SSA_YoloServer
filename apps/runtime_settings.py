@@ -28,6 +28,11 @@ def _int(name, default, minimum=0):
     return value if value >= minimum else default
 
 
+def _bool(name, default=False):
+    value = _text(name, "true" if default else "false").lower()
+    return value in {"1", "true", "yes", "on"}
+
+
 SPRING_HOST = _text("SSA_SPRING_HOST", "http://localhost:80/project_ssa_spring")
 ESP32_STREAM_URL = _text("SSA_ESP32_STREAM_URL", "http://192.168.137.128:80/stream")
 YOLO_MODEL_PATH = _text(
@@ -62,5 +67,14 @@ EVENT_REQUEST_TIMEOUT_SECONDS = _float("SSA_EVENT_REQUEST_TIMEOUT_SECONDS", 3.0,
 MAPPING_REQUEST_TIMEOUT_SECONDS = _float("SSA_MAPPING_REQUEST_TIMEOUT_SECONDS", 1.0, minimum=0.1)
 ESP32_CAPTURE_TIMEOUT_MS = _int("SSA_ESP32_CAPTURE_TIMEOUT_MS", 1000, minimum=1)
 ESP32_RECEIVER_JOIN_TIMEOUT_SECONDS = _float("SSA_ESP32_RECEIVER_JOIN_TIMEOUT_SECONDS", 1.5, minimum=0.1)
+# A worker may be in a bounded FFMPEG read or an in-flight Spring event request
+# when a channel is switched off.  Wait long enough to confirm that the thread
+# has actually exited instead of reporting a visual-only OFF state.
+SOURCE_WORKER_STOP_TIMEOUT_SECONDS = _float(
+    "SSA_SOURCE_WORKER_STOP_TIMEOUT_SECONDS", 5.0, minimum=0.1
+)
 SOURCE_WORKER_FRAME_INTERVAL_SECONDS = _float("SSA_SOURCE_WORKER_FRAME_INTERVAL_SECONDS", 0.03, minimum=0.0)
 SOURCE_WORKER_RETRY_SECONDS = _float("SSA_SOURCE_WORKER_RETRY_SECONDS", 0.5, minimum=0.05)
+# The monitoring console explicitly starts each selected channel.  Keeping this
+# off prevents detection, camera reads, and alarms from beginning on boot.
+AUTO_START_DETECTION_WORKERS = _bool("SSA_AUTO_START_DETECTION_WORKERS", False)
