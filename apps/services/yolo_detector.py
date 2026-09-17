@@ -1,278 +1,502 @@
-import cv2
-import time
-import threading
-from ultralytics import YOLO
-from apps.services import oracle_service
-from apps.services import notifier
+"""Thread-safe multi-source YOLO detector.
+
+Each configured source owns one capture/processing worker and one latest-result
+buffer. A single Ultralytics model is shared behind ``_model_inference_lock``:
+Ultralytics/PyTorch inference is not assumed to be safe for concurrent calls,
+and loading the same weights once per source would multiply CPU/GPU memory.
+"""
+
+import atexit
 import os
+import threading
+import time
+
+import cv2
+from ultralytics import YOLO
+
 from apps import runtime_settings
+from apps.services import oracle_service
 
 
-current_frame = None
-current_boxes = []
-active_connections = 0
-is_running = True
+# Bound stalled ESP32 FFMPEG reads. The OpenCV property fallback is also used.
+os.environ.setdefault(
+    "OPENCV_FFMPEG_CAPTURE_OPTIONS",
+    f"timeout;{runtime_settings.ESP32_CAPTURE_TIMEOUT_MS * 1000}",
+)
 
-# 하이브리드 제어권 상태 변수셋
-current_mode = "video" 
-current_source_path = runtime_settings.VIDEO_PATHS["video_1"]
-source_changed = False
 
-# 🔗 [아키텍처 통합] 축종 코드와 이상객체 코드를 오라클 DB 공통코드 규칙과 1:1로 일치시킵니다.
 YOLO_TO_CODE = {
-    "dog": "0",          # 정상 축종 (개)
-    "cat": "1",          # 정상 축종 (고양이)
-    "blue_alien": "2",   # 🚨 이상 객체 1번: 외계인 (오라클 CODE '2'번 매핑)
-    "blue_shark": "3",   # 🚨 이상 객체 2번: 상어 (오라클 CODE '3'번 매핑)
-    "pink_dragon": "4",  # 🚨 이상 객체 3번: 용 (오라클 CODE '4'번 매핑)
-    "tiger": "5"         # 🚨 이상 객체 4번: 호랑이 (오라클 CODE '5'번 매핑)
+    "dog": "0",
+    "cat": "1",
+    "blue_alien": "2",
+    "blue_shark": "3",
+    "pink_dragon": "4",
+    "tiger": "5",
 }
-
 ANIMAL_LABELS = ("dog", "cat")
 DANGER_LABELS = ("blue_alien", "blue_shark", "pink_dragon", "tiger")
 
 ANIMAL_NAME_MAP = {}
-
-# 🎯 [아키텍처 최종 실링 완치선] 
-# 외부 오라클 수급 배관 노이즈를 완벽 차단하고, 파이썬 코어에 진짜 기준 목표 마리수를 고정 주입합니다!
-TARGET_ANIMALS = {
-    0: 2,   # 개(0번) 기준 목표치: 2마리 강제 각인 [INDEX]
-    1: 1,   # 고양이(1번) 기준 목표치: 1마리 강제 각인 [INDEX]
-    "0": 2, # 문자열 방 유입 대비 이중 잠금 안전장치
-    "1": 1
-}
-
-# =================================================================
-# 🛡️ [메모리 고정 안전선] Flask 멀티스레드 요청 시 변수 초기화 절대 방어
-# =================================================================
-# 이미 메모리에 변수가 존재한다면(기존 YOLO 루프가 쓰고 있다면) 절대 재초기화하지 않습니다.
-if 'under_target_start_time' not in globals():
-    globals()['under_target_start_time'] = {"0": None, "1": None}
-
-if 'recovery_start_time' not in globals():
-    globals()['recovery_start_time'] = {"0": None, "1": None}
-
-if 'last_alarm_time' not in globals():
-    globals()['last_alarm_time'] = {"0": 0, "1": 0, "2": 0, "3": 0, "4": 0, "5": 0}
-
-# Keep target codes JSON-compatible and consistent with timer-state keys.
-TARGET_ANIMALS = {str(code_id): int(count) for code_id, count in TARGET_ANIMALS.items()}
-
+TARGET_ANIMALS = {"0": 2, "1": 1}
 ALARM_COOLDOWN = runtime_settings.ALARM_COOLDOWN_SECONDS
+program_start_time = None
+
+# Legacy single-source values remain available for existing callers. They are
+# mirrors of the selected default source only; new code must use the accessors.
+current_frame = None
+current_boxes = []
+active_connections = 0
+is_running = True
+current_mode = "video"
+current_source_path = runtime_settings.VIDEO_PATHS["video_1"]
+source_changed = False
+
+_model = None
+_model_inference_lock = threading.RLock()
+_metadata_lock = threading.Lock()
+_metadata_initialized = False
+_event_state_lock = threading.RLock()
+_manager_lock = threading.RLock()
+_legacy_state_lock = threading.Lock()
+
+# Per-source timers ensure an alert on one camera never suppresses another.
+under_target_start_time = {}
+recovery_start_time = {}
+last_alarm_time = {}
+
 
 def init_ai_metadata_from_oracle():
-    global ANIMAL_NAME_MAP, TARGET_ANIMALS, program_start_time
-    program_start_time = time.time()
-    
-    try:
-        db_code_map = oracle_service.fetch_code_map() 
-        raw_targets = oracle_service.fetch_target_counts() 
-        
-        # 🛡️ [완치 방어선] 오라클에서 받아온 목표치를 정수형(int)과 문자열(str) 키 모두에 복사 주입!
-        # 이 처리를 해야만 아래 logic 함수에서 .get() 할 때 0을 반환하지 않고 정상 작동합니다.
-        updated_targets = {}
-        for k, v in raw_targets.items():
-            updated_targets[str(k)] = int(v)
-            
-        TARGET_ANIMALS = updated_targets
-        ANIMAL_NAME_MAP = {k: db_code_map[v] for k, v in YOLO_TO_CODE.items() if v in db_code_map}
-        
-        print(f"✅ [AI 마스터 엔진 초기화 완효] 목표마리수(이중잠금): {TARGET_ANIMALS}")
-    except Exception as e:
-        print(f"⚠️ [초기화 예외 발생] 오라클 수급 실패로 기본 코드 고정값을 유지합니다. 에러: {e}")
+    """Load common-code labels and target counts once without blocking streams."""
+    global ANIMAL_NAME_MAP, TARGET_ANIMALS, program_start_time, _metadata_initialized
+
+    with _metadata_lock:
+        if _metadata_initialized:
+            return
+        program_start_time = time.time()
+        try:
+            db_code_map = oracle_service.fetch_code_map()
+            raw_targets = oracle_service.fetch_target_counts()
+            TARGET_ANIMALS = {str(key): int(value) for key, value in raw_targets.items()}
+            ANIMAL_NAME_MAP = {
+                label: db_code_map[code]
+                for label, code in YOLO_TO_CODE.items()
+                if code in db_code_map
+            }
+            print(f"[YOLO metadata ready] targets={TARGET_ANIMALS}")
+        except Exception as error:
+            print(f"[YOLO metadata fallback] {error}")
+        finally:
+            _metadata_initialized = True
 
 
-def process_animal_detection_logic(detected_names, frame):  # 🌟 매개변수 맨 끝에 frame 추가!
-    global last_alarm_time
-    under_target = globals()['under_target_start_time']
-    recovery = globals()['recovery_start_time']
+def _event_state_for(source_key):
+    """Return the isolated cooldown/timer maps for one video source."""
+    source_key = str(source_key)
+    under_target = under_target_start_time.setdefault(source_key, {"0": None, "1": None})
+    recovery = recovery_start_time.setdefault(source_key, {"0": None, "1": None})
+    cooldown = last_alarm_time.setdefault(
+        source_key, {code: 0.0 for code in YOLO_TO_CODE.values()}
+    )
+    return under_target, recovery, cooldown
+
+
+def process_animal_detection_logic(detected_names, frame, source_key=None):
+    """Apply animal-count policy with timers isolated by source key."""
+    source_key = source_key or get_default_source_key()
     current_time = time.time()
-    
-    for eng_name in ANIMAL_LABELS:
-        code_id = YOLO_TO_CODE.get(eng_name)
-        if not code_id: continue
-        
-        target_count = int(TARGET_ANIMALS.get(code_id, 0))
-        current_count = detected_names.count(eng_name)
-        
-        if current_count < target_count:
-            recovery[code_id] = None
-            if under_target.get(code_id) is None:
-                under_target[code_id] = current_time
-            elif (current_time - under_target[code_id]) >= runtime_settings.ANIMAL_UNDER_TARGET_SECONDS:
-                if (current_time - last_alarm_time.get(code_id, 0)) >= ALARM_COOLDOWN:
-                    last_alarm_time[code_id] = current_time
-                    hangle_name = ANIMAL_NAME_MAP.get(eng_name, eng_name)
-                    
-                    # 🌟 [트랙 A 호출부 교체] 맨 끝에 frame=frame 을 정밀 바인딩합니다.
-                    oracle_service.send_log_to_oracle(
-                        animal_type=code_id,
-                        detect_count=current_count,
-                        reason=f"AI 관제 시스템 실시간 분석 - {hangle_name} 보유 마리수 기준치 미달 현상 지속",
-                        frame=frame,
-                        source_key=oracle_service.CURRENT_ACTIVE_SOURCE,
-                    )
-        else:
-            if under_target.get(code_id) is not None:
+    pending_reports = []
+
+    with _event_state_lock:
+        under_target, recovery, cooldown = _event_state_for(source_key)
+        for label in ANIMAL_LABELS:
+            code_id = YOLO_TO_CODE[label]
+            target_count = int(TARGET_ANIMALS.get(code_id, 0))
+            current_count = detected_names.count(label)
+
+            if current_count < target_count:
+                recovery[code_id] = None
+                if under_target.get(code_id) is None:
+                    under_target[code_id] = current_time
+                elif (
+                    current_time - under_target[code_id]
+                    >= runtime_settings.ANIMAL_UNDER_TARGET_SECONDS
+                    and current_time - cooldown.get(code_id, 0.0) >= ALARM_COOLDOWN
+                ):
+                    cooldown[code_id] = current_time
+                    display_name = ANIMAL_NAME_MAP.get(label, label)
+                    pending_reports.append((code_id, current_count, display_name))
+            elif under_target.get(code_id) is not None:
                 if recovery.get(code_id) is None:
                     recovery[code_id] = current_time
-                elif (current_time - recovery[code_id]) >= runtime_settings.ANIMAL_RECOVERY_SECONDS:
+                elif current_time - recovery[code_id] >= runtime_settings.ANIMAL_RECOVERY_SECONDS:
                     under_target[code_id] = None
                     recovery[code_id] = None
-                    print(f"✅ [{eng_name}] 2.5초간 정상 수량 유지됨 -> 타이머 리셋.")
 
-        # -------------------------------------------------------------
-        # Part B. 위험 야생동물(이상객체) 출현 실시간 포착 벨트 (기존 코드 7~8페이지)
-        # -------------------------------------------------------------
-        # Retained as inactive compatibility code until legacy-path cleanup.
-        for danger_name in ():
-            if danger_name in detected_names:
-                code_id = YOLO_TO_CODE.get(danger_name)
-                if not code_id: continue
-                
-                if (current_time - last_alarm_time.get(code_id, 0)) >= ALARM_COOLDOWN:
-                    last_alarm_time[code_id] = current_time
-                    hangle_danger = ANIMAL_NAME_MAP.get(danger_name, danger_name)
-                    print(f"🚨 [위험 이상객체 포착] 관제 구역 내 {hangle_danger} 출현 확인! 오라클 즉시 원격 적재 트리거 가동.")
-                    
-                    # 💡 [핵심 수정] 위험 객체 포착 시에도 실시간으로 진짜 드론 ID를 가로챕니다!
-                    current_real_drone_id = oracle_service.CURRENT_ACTIVE_SOURCE
-                    
-                    # 💡 [호출부 수정] 파라미터 맨 끝에 drone_id로 진짜 가로챈 ID를 확실하게 주입합니다.
-                    oracle_service.send_danger_log_to_oracle(
-                        danger_type=code_id, 
-                        frame=frame,
-                        drone_id=current_real_drone_id  # 👈 디폴트 'DRONE01'을 밀어내고 매핑된 ID 전송!
-                    )
-
-
-
-def process_danger_detection_logic(detected_names, frame):
-    """Evaluate danger objects once per frame and send an allowed event."""
-    global last_alarm_time
-    current_time = time.time()
-
-    for danger_name in DANGER_LABELS:
-        if danger_name not in detected_names:
-            continue
-
-        code_id = YOLO_TO_CODE.get(danger_name)
-        if not code_id:
-            continue
-        if (current_time - last_alarm_time.get(code_id, 0)) < ALARM_COOLDOWN:
-            continue
-
-        last_alarm_time[code_id] = current_time
-        hangle_danger = ANIMAL_NAME_MAP.get(danger_name, danger_name)
-        print(f"[DANGER] {hangle_danger} detected")
-        oracle_service.send_danger_log_to_oracle(
-            danger_type=code_id,
+    # oracle_service queues HTTP/snapshot work, so do not hold the event lock.
+    for code_id, current_count, display_name in pending_reports:
+        oracle_service.send_log_to_oracle(
+            animal_type=code_id,
+            detect_count=current_count,
+            reason=(
+                f"AI 관제 시스템 실시간 분석 - {display_name} 보유 마리수 기준치 미달 현상 지속"
+            ),
             frame=frame,
-            drone_id=oracle_service.CURRENT_ACTIVE_SOURCE,
+            source_key=source_key,
         )
 
 
-def process_detection_events(detected_names, frame):
-    """Run the independent animal and danger event policies for one frame."""
-    process_animal_detection_logic(detected_names, frame)
-    process_danger_detection_logic(detected_names, frame)
+def process_danger_detection_logic(detected_names, frame, source_key=None):
+    """Apply danger-object cooldown separately for every video source."""
+    source_key = source_key or get_default_source_key()
+    current_time = time.time()
+    danger_reports = []
+
+    with _event_state_lock:
+        _, _, cooldown = _event_state_for(source_key)
+        for label in DANGER_LABELS:
+            if label not in detected_names:
+                continue
+            code_id = YOLO_TO_CODE[label]
+            if current_time - cooldown.get(code_id, 0.0) < ALARM_COOLDOWN:
+                continue
+            cooldown[code_id] = current_time
+            danger_reports.append((code_id, ANIMAL_NAME_MAP.get(label, label)))
+
+    for code_id, display_name in danger_reports:
+        print(f"[DANGER:{source_key}] {display_name} detected")
+        oracle_service.send_danger_log_to_oracle(
+            danger_type=code_id,
+            frame=frame,
+            source_key=source_key,
+        )
+
+
+def process_detection_events(detected_names, frame, source_key=None):
+    """Run all event policies for one source-specific inference result."""
+    process_animal_detection_logic(detected_names, frame, source_key)
+    process_danger_detection_logic(detected_names, frame, source_key)
+
+
+def _run_inference(frame):
+    """Return one annotated result while safely sharing one model instance."""
+    global _model
+    # One model + lock protects mutable PyTorch/Ultralytics inference state and
+    # avoids loading the same weights once per source.
+    with _model_inference_lock:
+        if _model is None:
+            _model = YOLO(runtime_settings.YOLO_MODEL_PATH)
+            print("[YOLO] shared model loaded")
+        results = _model(frame, conf=runtime_settings.YOLO_CONFIDENCE, verbose=False)
+
+    detected_names = []
+    boxes_for_client = []
+    if not results:
+        return frame, detected_names, boxes_for_client
+
+    result = results[0]
+    boxes = result.boxes
+    if boxes is not None:
+        names = result.names
+        for box in boxes:
+            confidence = float(box.conf.item())
+            if confidence < runtime_settings.YOLO_CONFIDENCE:
+                continue
+            coordinates = box.xyxy.tolist()[0]
+            label = names[int(box.cls.item())]
+            detected_names.append(label)
+            boxes_for_client.append([
+                coordinates[0],
+                coordinates[1],
+                coordinates[2] - coordinates[0],
+                coordinates[3] - coordinates[1],
+                label,
+                confidence,
+            ])
+    return result.plot(), detected_names, boxes_for_client
+
+
+class SourceWorker:
+    """Own one VideoCapture and the latest completed YOLO result for a source."""
+
+    def __init__(self, source_key, source_config):
+        self.source_key = source_key
+        self.mode = source_config["mode"]
+        self.uri = source_config["uri"]
+        self.stop_event = threading.Event()
+        self.frame_lock = threading.RLock()
+        self.capture_lock = threading.Lock()
+        self.thread = None
+        self.capture = None
+        self.latest_frame = None
+        self.latest_boxes = []
+        self.last_error = None
+        self.last_frame_at = None
+        self.frame_sequence = 0
+
+    def start(self):
+        with self.capture_lock:
+            if self.thread is not None and self.thread.is_alive():
+                return False
+            self.stop_event.clear()
+            self.thread = threading.Thread(
+                target=self._run,
+                name=f"yolo-source-{self.source_key}",
+                daemon=True,
+            )
+            self.thread.start()
+            return True
+
+    def stop(self, join_timeout=None):
+        self.stop_event.set()
+        with self.capture_lock:
+            capture = self.capture
+            self.capture = None
+        if capture is not None:
+            capture.release()
+        thread = self.thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(join_timeout or runtime_settings.ESP32_RECEIVER_JOIN_TIMEOUT_SECONDS)
+
+    def snapshot_frame(self):
+        with self.frame_lock:
+            return None if self.latest_frame is None else self.latest_frame.copy()
+
+    def snapshot_boxes(self):
+        with self.frame_lock:
+            return list(self.latest_boxes)
+
+    def status(self):
+        with self.frame_lock:
+            return {
+                "running": self.thread is not None and self.thread.is_alive() and not self.stop_event.is_set(),
+                "frame_ready": self.latest_frame is not None,
+                "last_frame_at": self.last_frame_at,
+                "frame_sequence": self.frame_sequence,
+                "last_error": self.last_error,
+            }
+
+    def _set_error(self, error):
+        with self.frame_lock:
+            self.last_error = str(error)
+
+    def _open_capture(self):
+        if self.mode != "esp32":
+            capture = cv2.VideoCapture(self.uri)
+            capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            return capture
+
+        open_timeout = getattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC", None)
+        read_timeout = getattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC", None)
+        if open_timeout is not None and read_timeout is not None:
+            properties = (
+                open_timeout,
+                runtime_settings.ESP32_CAPTURE_TIMEOUT_MS,
+                read_timeout,
+                runtime_settings.ESP32_CAPTURE_TIMEOUT_MS,
+            )
+            try:
+                capture = cv2.VideoCapture(self.uri, cv2.CAP_FFMPEG, properties)
+            except (TypeError, cv2.error):
+                capture = cv2.VideoCapture(self.uri, cv2.CAP_FFMPEG)
+        else:
+            capture = cv2.VideoCapture(self.uri, cv2.CAP_FFMPEG)
+        capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        return capture
+
+    def _publish(self, frame, boxes):
+        global current_frame, current_boxes
+        with self.frame_lock:
+            self.latest_frame = frame
+            self.latest_boxes = boxes
+            self.last_frame_at = time.time()
+            self.last_error = None
+            self.frame_sequence += 1
+        if self.source_key == get_default_source_key():
+            with _legacy_state_lock:
+                current_frame = frame
+                current_boxes = list(boxes)
+
+    def _run(self):
+        init_ai_metadata_from_oracle()
+        while not self.stop_event.is_set():
+            capture = None
+            retry_after_release = False
+            try:
+                capture = self._open_capture()
+                with self.capture_lock:
+                    if self.stop_event.is_set():
+                        capture.release()
+                        break
+                    self.capture = capture
+
+                if not capture.isOpened():
+                    self._set_error("VideoCapture could not be opened")
+                    capture.release()
+                    self.stop_event.wait(runtime_settings.SOURCE_WORKER_RETRY_SECONDS)
+                    continue
+
+                while not self.stop_event.is_set():
+                    success, frame = capture.read()
+                    if not success:
+                        if self.mode == "video":
+                            # Loop valid files, but do not spin on a capture that
+                            # opened successfully yet cannot decode any frame.
+                            if capture.get(cv2.CAP_PROP_FRAME_COUNT) > 0:
+                                capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                                self.stop_event.wait(runtime_settings.SOURCE_WORKER_FRAME_INTERVAL_SECONDS)
+                                continue
+                        retry_after_release = True
+                        break
+                    try:
+                        annotated_frame, detected_names, boxes = _run_inference(frame)
+                        process_detection_events(detected_names, annotated_frame, self.source_key)
+                        self._publish(annotated_frame, boxes)
+                    except Exception as error:
+                        self._set_error(error)
+                        print(f"[YOLO:{self.source_key}] inference error: {error}")
+                        self.stop_event.wait(runtime_settings.SOURCE_WORKER_RETRY_SECONDS)
+                    else:
+                        # No queue is retained: each source keeps only its newest
+                        # completed result, prioritising low latency over history.
+                        self.stop_event.wait(runtime_settings.SOURCE_WORKER_FRAME_INTERVAL_SECONDS)
+            except Exception as error:
+                self._set_error(error)
+                print(f"[YOLO:{self.source_key}] worker error: {error}")
+                self.stop_event.wait(runtime_settings.SOURCE_WORKER_RETRY_SECONDS)
+            finally:
+                if capture is not None:
+                    capture.release()
+                with self.capture_lock:
+                    if self.capture is capture:
+                        self.capture = None
+            if retry_after_release:
+                self.stop_event.wait(runtime_settings.SOURCE_WORKER_RETRY_SECONDS)
+
+
+_workers = {
+    source_key: SourceWorker(source_key, source_config)
+    for source_key, source_config in runtime_settings.VIDEO_SOURCES.items()
+}
+_default_source_key = runtime_settings.DEFAULT_VIDEO_SOURCE_KEY
+
+
+def is_known_source(source_key):
+    return source_key in _workers
+
+
+def get_source_keys():
+    return tuple(_workers.keys())
+
+
+def get_default_source_key():
+    with _manager_lock:
+        return _default_source_key
+
+
+def start_source_worker(source_key):
+    worker = _workers.get(source_key)
+    if worker is None:
+        return False
+    worker.start()
+    return True
+
+
+def stop_source_worker(source_key):
+    worker = _workers.get(source_key)
+    if worker is None:
+        return False
+    worker.stop()
+    return True
+
+
+def start_all_workers():
+    for source_key in get_source_keys():
+        start_source_worker(source_key)
+
+
+def stop_all_workers():
+    global is_running
+    is_running = False
+    for worker in tuple(_workers.values()):
+        worker.stop()
+
+
+def set_default_source(source_key):
+    """Select the legacy/default stream without stopping other workers."""
+    global _default_source_key, current_mode, current_source_path, source_changed
+    if not is_known_source(source_key):
+        return False
+    start_source_worker(source_key)
+    with _manager_lock:
+        _default_source_key = source_key
+        source_config = runtime_settings.VIDEO_SOURCES[source_key]
+        current_mode = source_config["mode"]
+        current_source_path = source_config["uri"]
+        source_changed = False
+        oracle_service.CURRENT_ACTIVE_SOURCE = source_key
+    worker = _workers[source_key]
+    frame = worker.snapshot_frame()
+    boxes = worker.snapshot_boxes()
+    with _legacy_state_lock:
+        global current_frame, current_boxes
+        current_frame = frame
+        current_boxes = boxes
+    print(f"[YOLO] default stream selected: {source_key}")
+    return True
+
+
+def get_latest_frame(source_key=None):
+    source_key = source_key or get_default_source_key()
+    worker = _workers.get(source_key)
+    if worker is None:
+        return None
+    worker.start()
+    return worker.snapshot_frame()
+
+
+def get_latest_boxes(source_key=None):
+    source_key = source_key or get_default_source_key()
+    worker = _workers.get(source_key)
+    if worker is None:
+        return []
+    worker.start()
+    return worker.snapshot_boxes()
+
+
+def get_source_status():
+    return {source_key: worker.status() for source_key, worker in _workers.items()}
+
+
+def stream_client_opened():
+    global active_connections
+    with _legacy_state_lock:
+        active_connections += 1
+
+
+def stream_client_closed():
+    global active_connections
+    with _legacy_state_lock:
+        active_connections = max(0, active_connections - 1)
 
 
 def change_ai_source_runtime(mode, path_or_url):
-    global current_mode, current_source_path, source_changed
-    current_mode = mode
-    current_source_path = path_or_url
-    source_changed = True
-    print(f"🔄 [하이브리드 엔진 수신원 교체 명령 수신] Mode: {mode} | Path: {path_or_url}")
+    """Compatibility adapter for the former single-source switch API."""
+    if mode == "esp32":
+        return set_default_source("esp32")
+    for source_key, source_config in runtime_settings.VIDEO_SOURCES.items():
+        if source_config["mode"] == "video" and source_config["uri"] == path_or_url:
+            return set_default_source(source_key)
+    print(f"[YOLO] ignored unknown legacy source path: {path_or_url}")
+    return False
+
 
 def video_capture_and_detect():
-    global current_frame, current_boxes, source_changed, current_mode, current_source_path
-    
-    # 🎯 프로젝트 실물 custom 가중치 파일 경로 사수
-    # 문자열을 쪼개지 말고 반드시 이렇게 깔끔하게 한 줄로 작성하셔야 합니다.
-    model = YOLO(runtime_settings.YOLO_MODEL_PATH)
+    """Legacy entry point retained for callers using the old worker target."""
+    start_all_workers()
 
-    cap = cv2.VideoCapture(current_source_path)
 
-    init_ai_metadata_from_oracle()
-
-    while is_running:
-        try:
-            if source_changed:
-                if cap is not None:
-                    cap.release()
-                cap = None
-                if current_mode != "esp32":
-                    cap = cv2.VideoCapture(current_source_path)
-                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                source_changed = False
-                continue
-
-            # ESP32 is captured and inferred only by apps.esp32.views.  Opening
-            # the URL here as well leaves an orphaned TCP retry loop on switches.
-            if current_mode == "esp32":
-                time.sleep(0.1)
-                continue
-
-            if active_connections <= 0:
-                time.sleep(0.5)
-                continue
-                
-            success, frame = cap.read()
-            if not success:
-                if current_mode == "video":
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0) 
-                else:
-                    time.sleep(0.5) 
-                continue
-
-            # 1. YOLOv8 고속 추론 가동
-            results = model(frame, conf=runtime_settings.YOLO_CONFIDENCE, verbose=False)
-            
-            # 🎯 [UnboundLocalError 완벽 박멸 복원] 주머니 변수 상자를 먼저 깨끗하게 개설합니다.
-            detected_names = []
-            temp_boxes = []
-
-            if results is not None and len(results) > 0:
-                boxes = results[0].boxes
-                names = results[0].names
-
-                if boxes is not None and len(boxes) > 0:
-                    for box in boxes:
-                        if box.conf.item() >= runtime_settings.YOLO_CONFIDENCE:
-                            # 2차원 리스트 대괄호 연산 오류 완치 파싱 완료
-                            xyxy_list = box.xyxy.tolist()[0]
-                            rx = xyxy_list[0]
-                            ry = xyxy_list[1]
-                            rw = xyxy_list[2] - xyxy_list[0]
-                            rh = xyxy_list[3] - xyxy_list[1]
-                            
-                            cls_id = int(box.cls.item())
-                            label = names[cls_id] # 💡 예: 'pink_dragon', 'dog' 등 추출
-                            score = float(box.conf.item())
-                            
-                            # 🎯 [질문자님 아이디어 저격 해답선] 
-                            # YOLO가 인지한 영문 레이블 명칭을 탐지 배열 주머니에 단 한 글자도 빠짐없이 무조건 집어넣습니다!
-                            detected_names.append(label)
-                            temp_boxes.append([rx, ry, rw, rh, label, score])
-
-            # 전역 버퍼 동기화
-            current_boxes = temp_boxes
-            
-            # 3. 비디오 위에 AI 바운딩 박스를 문신처럼 실시간 각인 주입
-            if results is not None and len(results) > 0:
-                current_frame = results[0].plot()
-            else:
-                current_frame = frame
-                
-            # 🎯 [대통합 개통] 이제 detected_names 안에 ['pink_dragon', 'dog']가 꽉 차서 
-            # 타이머 변수셋 내부로 드디어 신호탄이 정상 수급 및 점화됩니다!
-            process_detection_events(detected_names, current_frame)
-            
-            time.sleep(0.03)
-        except Exception as e:
-            print(f"⚠️ [하이브리드 코어 루프 예외 방어]: {e}")
-            time.sleep(0.5)
-
-ai_thread = threading.Thread(target=video_capture_and_detect, daemon=True)
-ai_thread.start()
+# The former single worker is intentionally not started. Per-source workers are
+# eager-started below, preserving the old detector module's startup behaviour.
+ai_thread = None
+start_all_workers()
+atexit.register(stop_all_workers)

@@ -49,6 +49,7 @@ def _save_physical_snapshot(frame, folder_name):
 
 def get_active_drone_id(source_key=None):
     active_drone_id = "DRONE01" # 최종 통신 실패 대비 방어선
+    requested_source = str(source_key or CURRENT_ACTIVE_SOURCE)
     try:
         mapping_url = f"{SPRING_HOST}/yolo/currentMappings"
         map_response = requests.get(mapping_url, timeout=runtime_settings.MAPPING_REQUEST_TIMEOUT_SECONDS)
@@ -65,10 +66,9 @@ def get_active_drone_id(source_key=None):
                 
                 # 만약 active_mappings마저 또 dict 형태라면 진짜 ID 추출 시도
                 if isinstance(active_mappings, dict):
-                    requested_source = source_key or CURRENT_ACTIVE_SOURCE
                     active_drone_id = active_mappings.get(requested_source, "DRONE01")
             
-            print(f"✈ [매핑 결과] 채널 [{CURRENT_ACTIVE_SOURCE}] -> 가로챈 드론 [{active_drone_id}]")
+            print(f"✈ [매핑 결과] 채널 [{requested_source}] -> 가로챈 드론 [{active_drone_id}]")
         else:
             print(f"❌ [매핑 서버 응답 에러] HTTP 상태 코드: {map_response.status_code}")
             

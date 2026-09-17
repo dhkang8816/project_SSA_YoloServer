@@ -39,6 +39,18 @@ VIDEO_PATHS = {
     "video_2": _text("SSA_VIDEO_2_PATH", str(PROJECT_ROOT / "videos" / "streaming_1.mp4")),
     "video_3": _text("SSA_VIDEO_3_PATH", str(PROJECT_ROOT / "videos" / "streaming_2.mp4")),
 }
+
+# All detector workers are built from this one registry.  Adding a source only
+# requires a setting here; routes and worker management do not hard-code keys.
+VIDEO_SOURCES = {
+    key: {"mode": "video", "uri": path}
+    for key, path in VIDEO_PATHS.items()
+}
+VIDEO_SOURCES["esp32"] = {"mode": "esp32", "uri": ESP32_STREAM_URL}
+DEFAULT_VIDEO_SOURCE_KEY = _text("SSA_DEFAULT_VIDEO_SOURCE", "video_1")
+if DEFAULT_VIDEO_SOURCE_KEY not in VIDEO_SOURCES:
+    DEFAULT_VIDEO_SOURCE_KEY = "video_1"
+
 UPLOAD_ROOT = _text("SSA_UPLOAD_ROOT", "C:/upload")
 
 YOLO_CONFIDENCE = _float("SSA_YOLO_CONFIDENCE", 0.50, minimum=0.0)
@@ -50,3 +62,5 @@ EVENT_REQUEST_TIMEOUT_SECONDS = _float("SSA_EVENT_REQUEST_TIMEOUT_SECONDS", 3.0,
 MAPPING_REQUEST_TIMEOUT_SECONDS = _float("SSA_MAPPING_REQUEST_TIMEOUT_SECONDS", 1.0, minimum=0.1)
 ESP32_CAPTURE_TIMEOUT_MS = _int("SSA_ESP32_CAPTURE_TIMEOUT_MS", 1000, minimum=1)
 ESP32_RECEIVER_JOIN_TIMEOUT_SECONDS = _float("SSA_ESP32_RECEIVER_JOIN_TIMEOUT_SECONDS", 1.5, minimum=0.1)
+SOURCE_WORKER_FRAME_INTERVAL_SECONDS = _float("SSA_SOURCE_WORKER_FRAME_INTERVAL_SECONDS", 0.03, minimum=0.0)
+SOURCE_WORKER_RETRY_SECONDS = _float("SSA_SOURCE_WORKER_RETRY_SECONDS", 0.5, minimum=0.05)
