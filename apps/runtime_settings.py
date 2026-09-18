@@ -34,7 +34,7 @@ def _bool(name, default=False):
 
 
 SPRING_HOST = _text("SSA_SPRING_HOST", "http://localhost:80/project_ssa_spring")
-ESP32_STREAM_URL = _text("SSA_ESP32_STREAM_URL", "http://192.168.137.128:80/stream")
+ESP32_STREAM_URL = _text("SSA_ESP32_STREAM_URL", "http://192.168.137.161:80/stream")
 YOLO_MODEL_PATH = _text(
     "SSA_YOLO_MODEL_PATH",
     str(PROJECT_ROOT / "runs" / "detect" / "my_yolov12_project" / "yolov8n_train-6" / "weights" / "best.pt"),
