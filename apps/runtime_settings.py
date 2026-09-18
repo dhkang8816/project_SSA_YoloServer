@@ -41,7 +41,7 @@ YOLO_MODEL_PATH = _text(
 )
 VIDEO_PATHS = {
     "video_1": _text("SSA_VIDEO_1_PATH", str(PROJECT_ROOT / "videos" / "streaming_0.mp4")),
-    "video_2": _text("SSA_VIDEO_2_PATH", str(PROJECT_ROOT / "videos" / "streaming_1.mp4")),
+    "video_2": _text("SSA_VIDEO_2_PATH", str(PROJECT_ROOT / "videos" / "streaming_3.mp4")),
     "video_3": _text("SSA_VIDEO_3_PATH", str(PROJECT_ROOT / "videos" / "streaming_2.mp4")),
 }
 
