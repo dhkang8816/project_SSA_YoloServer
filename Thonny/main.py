@@ -69,6 +69,17 @@ ultrasonic_trigger.value(0)
 # 공통 부저 함수
 # =========================================================
 
+def init_buzzer():
+    try:
+        melody_buzzer.freq(500)
+        melody_buzzer.duty(BUZZER_DUTY)
+        time.sleep_ms(30)
+        melody_buzzer.duty(0)
+        return True
+    except Exception:
+        melody_buzzer.duty(0)
+        return False
+
 def _beep(frequency, duration_ms):
     """
     지정한 주파수와 시간으로 부저를 한 번 울린다.
