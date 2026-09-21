@@ -1,0 +1,153 @@
+"""Serialize ESP32 buzzer commands without blocking YOLO workers.
+
+The ESP32 board is controlled through the existing ``mpremote + COM6`` path.
+Only this module invokes mpremote, and one daemon worker owns the queue so two
+threads never open the COM port concurrently.
+"""
+
+import queue
+import subprocess
+import threading
+
+
+_buzzer_queue = queue.Queue()
+_worker_lock = threading.Lock()
+_worker_thread = None
+_state_lock = threading.Lock()
+_buzzer_enabled = True
+_collision_level = "SAFE"
+_mpremote_lock = threading.Lock()
+
+_COMMANDS = {
+    "animal": 'mpremote connect COM6 resume exec "import main; main.play_animal_alert()"',
+    "danger": 'mpremote connect COM6 resume exec "import main; main.play_danger_alert()"',
+}
+_ERROR_MESSAGES = {
+    "animal": "animal buzzer command failed",
+    "danger": "danger buzzer command failed",
+}
+
+
+def run_mpremote(command, timeout=15, capture_output=False):
+    """Serialize every USB/COM command issued by this Python process."""
+    with _mpremote_lock:
+        return subprocess.run(
+            command,
+            shell=True,
+            check=True,
+            timeout=timeout,
+            capture_output=capture_output,
+            text=capture_output,
+        )
+
+
+def _run_mpremote_command(alert_type):
+    """Run one existing mpremote command; failures must not stop the worker."""
+    try:
+        if alert_type.startswith("collision:"):
+            level = alert_type.split(":", 1)[1]
+            command = (
+                'mpremote connect COM6 resume exec "import main; '
+                f'main.play_collision_alert(\'{level}\')"'
+            )
+        else:
+            command = _COMMANDS[alert_type]
+        run_mpremote(command, capture_output=True)
+    except Exception as error:
+        message = _ERROR_MESSAGES.get(alert_type, "collision buzzer command failed")
+        stderr = getattr(error, "stderr", None)
+        stdout = getattr(error, "stdout", None)
+        detail = stderr or stdout or str(error)
+        print(f"[buzzer] {message}: {str(detail).strip()}")
+
+
+def _buzzer_worker():
+    """Consume commands one at a time to protect the shared USB COM port."""
+    while True:
+        alert_type = _buzzer_queue.get()
+        try:
+            # Recheck immediately before USB access so an OFF change also
+            # suppresses alerts that were already waiting in the queue.
+            if is_buzzer_enabled():
+                _run_mpremote_command(alert_type)
+        finally:
+            _buzzer_queue.task_done()
+
+
+def start_buzzer_service():
+    """Start exactly one daemon worker for this Python process."""
+    global _worker_thread
+    with _worker_lock:
+        if _worker_thread is not None and _worker_thread.is_alive():
+            return False
+        _worker_thread = threading.Thread(
+            target=_buzzer_worker,
+            name="esp32-buzzer-worker",
+            daemon=True,
+        )
+        _worker_thread.start()
+        print("[buzzer] service worker started")
+        return True
+
+
+def _enqueue(alert_type):
+    if not is_buzzer_enabled():
+        return False
+    start_buzzer_service()
+    _buzzer_queue.put(alert_type)
+    return True
+
+
+def _discard_pending_events():
+    """Drop alerts waiting in the queue after an operator switches OFF."""
+    while True:
+        try:
+            _buzzer_queue.get_nowait()
+        except queue.Empty:
+            return
+        else:
+            _buzzer_queue.task_done()
+
+
+def set_buzzer_enabled(enabled):
+    """Set the process-wide sound state; OFF never changes YOLO processing."""
+    global _buzzer_enabled
+    enabled = bool(enabled)
+    with _state_lock:
+        _buzzer_enabled = enabled
+    if not enabled:
+        _discard_pending_events()
+    print(f"[buzzer] sound {'enabled' if enabled else 'disabled'}")
+    return enabled
+
+
+def is_buzzer_enabled():
+    """Return the process-wide sound state used by enqueue and worker paths."""
+    with _state_lock:
+        return _buzzer_enabled
+
+
+def set_collision_level(level):
+    """Queue one tone for a level transition; polling never floods COM."""
+    global _collision_level
+    level = str(level or "UNKNOWN").upper()
+    if level not in {"SAFE", "CAUTION", "WARNING", "DANGER", "UNKNOWN"}:
+        level = "UNKNOWN"
+
+    with _state_lock:
+        changed = level != _collision_level
+        _collision_level = level
+
+    if changed and level in {"CAUTION", "WARNING", "DANGER"}:
+        _enqueue(f"collision:{level}")
+    return level
+
+
+def trigger_animal_sound():
+    """Queue an animal-under-target alert and return immediately."""
+    _enqueue("animal")
+
+
+def trigger_danger_sound():
+    """Queue a danger-object alert and return immediately."""
+    _enqueue("danger")

@@ -16,6 +16,7 @@ from ultralytics import YOLO
 
 from apps import runtime_settings
 from apps.services import oracle_service
+from apps.services.buzzer_helper import trigger_animal_sound, trigger_danger_sound
 
 
 # Bound stalled ESP32 FFMPEG reads. The OpenCV property fallback is also used.
@@ -143,6 +144,7 @@ def process_animal_detection_logic(detected_names, frame, source_key=None):
             frame=frame,
             source_key=source_key,
         )
+        trigger_animal_sound()
 
 
 def process_danger_detection_logic(detected_names, frame, source_key=None):
@@ -169,6 +171,7 @@ def process_danger_detection_logic(detected_names, frame, source_key=None):
             frame=frame,
             source_key=source_key,
         )
+        trigger_danger_sound()
 
 
 def process_detection_events(detected_names, frame, source_key=None):

@@ -2,10 +2,10 @@ import time
 
 import cv2
 import numpy as np
-from flask import Blueprint, Response, jsonify, render_template
+from flask import Blueprint, Response, jsonify, render_template, request
 
 from apps.app import csrf
-from apps.services import yolo_detector
+from apps.services import buzzer_helper, sensor_helper, yolo_detector
 
 
 stream = Blueprint(
@@ -109,6 +109,35 @@ def _status_payload():
         "default_source": yolo_detector.get_default_source_key(),
         "sources": yolo_detector.get_source_status(),
     }
+
+
+@stream.route("/buzzer/enabled", methods=["GET", "POST"])
+@csrf.exempt
+def control_buzzer_enabled():
+    """Read or update the sound-only state shared by the buzzer worker."""
+    if request.method == "POST":
+        payload = request.get_json(silent=True) or request.form.to_dict()
+        if "enabled" not in payload:
+            return jsonify({"status": "FAIL", "error": "enabled is required"}), 400
+
+        enabled = payload["enabled"]
+        if isinstance(enabled, str):
+            normalized = enabled.strip().lower()
+            if normalized not in {"true", "false", "1", "0", "on", "off"}:
+                return jsonify({"status": "FAIL", "error": "enabled must be boolean"}), 400
+            enabled = normalized in {"true", "1", "on"}
+        elif not isinstance(enabled, bool):
+            return jsonify({"status": "FAIL", "error": "enabled must be boolean"}), 400
+
+        buzzer_helper.set_buzzer_enabled(enabled)
+
+    return jsonify({"status": "SUCCESS", "enabled": buzzer_helper.is_buzzer_enabled()})
+
+
+@stream.route("/sensor/status")
+def sensor_status():
+    """Return cached board sensors without starting a USB command per request."""
+    return jsonify(sensor_helper.get_latest_sensor_status())
 
 
 @stream.route("/detection/<source_key>/<action>", methods=["POST"])

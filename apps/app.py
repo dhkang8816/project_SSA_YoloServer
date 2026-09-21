@@ -1,4 +1,5 @@
 import logging  # 🛠️ 로그 필터링을 위해 logging 라이브러리 추가
+import threading
 from pathlib import Path
 from flask import Flask
 from flask_migrate import Migrate
@@ -29,6 +30,25 @@ login_manager.login_message = ""
 def create_app(config_key):
     app = Flask(__name__)
     app.config.from_object(config[config_key])
+
+    # Werkzeug's debug reloader creates a parent and a serving child process.
+    # Defer USB workers until a real request, which only the serving process
+    # receives, so the reloader parent cannot contend for COM6.
+    services_start_lock = threading.Lock()
+    services_started = False
+
+    def ensure_services_started():
+        nonlocal services_started
+        with services_start_lock:
+            if services_started:
+                return
+            from apps.services.starter import start_services
+            start_services()
+            services_started = True
+
+    @app.before_request
+    def initialize_runtime_services():
+        ensure_services_started()
     
     csrf.init_app(app)
     db.init_app(app)
