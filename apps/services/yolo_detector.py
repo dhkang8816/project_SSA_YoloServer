@@ -10,6 +10,7 @@ import atexit
 import os
 import threading
 import time
+from datetime import datetime
 
 import cv2
 from ultralytics import YOLO
@@ -101,7 +102,22 @@ def _event_state_for(source_key):
     return under_target, recovery, cooldown
 
 
-def process_animal_detection_logic(detected_names, frame, source_key=None):
+def _notification_metadata(event_type, label, boxes):
+    """Use inference metadata already produced for this frame; never re-run YOLO."""
+    confidence = None
+    for box in boxes or ():
+        if len(box) >= 6 and box[4] == label:
+            value = box[5]
+            confidence = value if confidence is None else max(confidence, value)
+    return {
+        "event_type": event_type,
+        "object_label": label,
+        "confidence": confidence,
+        "detected_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+def process_animal_detection_logic(detected_names, frame, source_key=None, boxes=None):
     """Apply animal-count policy with timers isolated by source key."""
     source_key = source_key or get_default_source_key()
     current_time = time.time()
@@ -125,7 +141,7 @@ def process_animal_detection_logic(detected_names, frame, source_key=None):
                 ):
                     cooldown[code_id] = current_time
                     display_name = ANIMAL_NAME_MAP.get(label, label)
-                    pending_reports.append((code_id, current_count, display_name))
+                    pending_reports.append((code_id, current_count, display_name, label))
             elif under_target.get(code_id) is not None:
                 if recovery.get(code_id) is None:
                     recovery[code_id] = current_time
@@ -134,7 +150,7 @@ def process_animal_detection_logic(detected_names, frame, source_key=None):
                     recovery[code_id] = None
 
     # oracle_service queues HTTP/snapshot work, so do not hold the event lock.
-    for code_id, current_count, display_name in pending_reports:
+    for code_id, current_count, display_name, label in pending_reports:
         oracle_service.send_log_to_oracle(
             animal_type=code_id,
             detect_count=current_count,
@@ -143,11 +159,12 @@ def process_animal_detection_logic(detected_names, frame, source_key=None):
             ),
             frame=frame,
             source_key=source_key,
+            notification=_notification_metadata("animal", label, boxes),
         )
         trigger_animal_sound()
 
 
-def process_danger_detection_logic(detected_names, frame, source_key=None):
+def process_danger_detection_logic(detected_names, frame, source_key=None, boxes=None):
     """Apply danger-object cooldown separately for every video source."""
     source_key = source_key or get_default_source_key()
     current_time = time.time()
@@ -162,22 +179,23 @@ def process_danger_detection_logic(detected_names, frame, source_key=None):
             if current_time - cooldown.get(code_id, 0.0) < ALARM_COOLDOWN:
                 continue
             cooldown[code_id] = current_time
-            danger_reports.append((code_id, ANIMAL_NAME_MAP.get(label, label)))
+            danger_reports.append((code_id, ANIMAL_NAME_MAP.get(label, label), label))
 
-    for code_id, display_name in danger_reports:
+    for code_id, display_name, label in danger_reports:
         print(f"[DANGER:{source_key}] {display_name} detected")
         oracle_service.send_danger_log_to_oracle(
             danger_type=code_id,
             frame=frame,
             source_key=source_key,
+            notification=_notification_metadata("danger", label, boxes),
         )
         trigger_danger_sound()
 
 
-def process_detection_events(detected_names, frame, source_key=None):
+def process_detection_events(detected_names, frame, source_key=None, boxes=None):
     """Run all event policies for one source-specific inference result."""
-    process_animal_detection_logic(detected_names, frame, source_key)
-    process_danger_detection_logic(detected_names, frame, source_key)
+    process_animal_detection_logic(detected_names, frame, source_key, boxes)
+    process_danger_detection_logic(detected_names, frame, source_key, boxes)
 
 
 def _run_inference(frame):
@@ -247,16 +265,13 @@ class SourceWorker:
                 daemon=True,
             )
             self.thread.start()
+            print(f"[SourceWorker {self.source_key}] started")
             return True
 
     def stop(self, join_timeout=None):
-        """Request a stop and return True only after the worker has exited."""
+        """Request shutdown; only ``_run`` is allowed to release VideoCapture."""
         self.stop_event.set()
-        with self.capture_lock:
-            capture = self.capture
-            self.capture = None
-        if capture is not None:
-            capture.release()
+        print(f"[SourceWorker {self.source_key}] stop requested")
         thread = self.thread
         if thread is not None and thread is not threading.current_thread():
             thread.join(
@@ -266,7 +281,10 @@ class SourceWorker:
             self.latest_frame = None
             self.latest_boxes = []
             self.last_frame_at = None
-        return thread is None or not thread.is_alive()
+        stopped = thread is None or not thread.is_alive()
+        if stopped:
+            print(f"[SourceWorker {self.source_key}] stopped")
+        return stopped
 
     def snapshot_frame(self):
         with self.frame_lock:
@@ -341,13 +359,11 @@ class SourceWorker:
                 capture = self._open_capture()
                 with self.capture_lock:
                     if self.stop_event.is_set():
-                        capture.release()
                         break
                     self.capture = capture
 
                 if not capture.isOpened():
                     self._set_error("VideoCapture could not be opened")
-                    capture.release()
                     self.stop_event.wait(runtime_settings.SOURCE_WORKER_RETRY_SECONDS)
                     continue
 
@@ -367,7 +383,12 @@ class SourceWorker:
                         annotated_frame, detected_names, boxes = _run_inference(frame)
                         if self.stop_event.is_set():
                             break
-                        process_detection_events(detected_names, annotated_frame, self.source_key)
+                        process_detection_events(
+                            detected_names,
+                            annotated_frame,
+                            self.source_key,
+                            boxes,
+                        )
                         if self.stop_event.is_set():
                             break
                         self._publish(annotated_frame, boxes)
@@ -385,7 +406,10 @@ class SourceWorker:
                 self.stop_event.wait(runtime_settings.SOURCE_WORKER_RETRY_SECONDS)
             finally:
                 if capture is not None:
+                    # This worker is the sole owner of its decoder. Never call
+                    # release() from HTTP/control threads while read() may run.
                     capture.release()
+                    print(f"[SourceWorker {self.source_key}] capture released")
                 with self.capture_lock:
                     if self.capture is capture:
                         self.capture = None

@@ -1,11 +1,13 @@
 import os
 import uuid
+from datetime import datetime
 import cv2
 import requests
 import json
 import threading
 from queue import Queue, Full
 from apps import runtime_settings
+from apps.services.notifier import enqueue_discord_alert
 
 # 🎯 [아키텍처 최종 대개통] 포트 번호(:8080)를 명시하여 자바 톰캣 수신부와 완벽하게 일직선 연결!
 SPRING_HOST = runtime_settings.SPRING_HOST
@@ -47,6 +49,46 @@ def _save_physical_snapshot(frame, folder_name):
         print(f"❌ [자가캡처 실패] 기본 이미지 복사 중 시스템 예외 발생: {e}")
         return "noImage.jpg"
 
+def _local_snapshot_path(folder_name, saved_file_name):
+    """Return a file-system path for Discord, never the Spring web URL."""
+    if not saved_file_name or saved_file_name == "noImage.jpg":
+        return None
+    candidate = os.path.join(runtime_settings.UPLOAD_ROOT, folder_name, saved_file_name)
+    return candidate if os.path.isfile(candidate) else None
+
+
+def _enqueue_detection_discord_alert(notification, image_path, drone_id, source_key):
+    """Queue one completed report event without coupling Discord to Spring success."""
+    if not notification:
+        return False
+
+    event_type = notification.get("event_type", "animal")
+    title = "[위험 객체 AI 탐지 경보]" if event_type == "danger" else "[유기동물 AI 탐지 경보]"
+    object_label = notification.get("object_label") or "알 수 없음"
+    detected_at = notification.get("detected_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    lines = [
+        title,
+        "",
+        f"드론: {drone_id}",
+        f"채널: {source_key}",
+        f"탐지 대상: {object_label}",
+    ]
+    confidence = notification.get("confidence")
+    if confidence is not None:
+        try:
+            lines.append(f"신뢰도: {float(confidence) * 100:.1f}%")
+        except (TypeError, ValueError):
+            pass
+    lines.append(f"탐지 시각: {detected_at}")
+    return enqueue_discord_alert(
+        "\n".join(lines),
+        image_path=image_path,
+        event_type=event_type,
+        drone_id=drone_id,
+        channel=source_key,
+    )
+
+
 def get_active_drone_id(source_key=None):
     active_drone_id = "DRONE01" # 최종 통신 실패 대비 방어선
     requested_source = str(source_key or CURRENT_ACTIVE_SOURCE)
@@ -78,9 +120,10 @@ def get_active_drone_id(source_key=None):
     return active_drone_id
 
 
-def _send_log_to_oracle(animal_type, detect_count, reason, frame, source_key):
+def _send_log_to_oracle(animal_type, detect_count, reason, frame, source_key, notification=None):
     url = API_REPORT
     saved_file_name = _save_physical_snapshot(frame, "detection")
+    image_path = _local_snapshot_path("detection", saved_file_name)
     
     # 💡 분리한 공통 함수 호출로 동적 ID 획득
     active_drone_id = get_active_drone_id(source_key)
@@ -128,7 +171,11 @@ def _send_log_to_oracle(animal_type, detect_count, reason, frame, source_key):
     except Exception as e:
         print(f"⚠[오라클 통신 서비스] 스프링 허브 연결 물리적 실패. 에러: {e}")
 
-def _send_danger_log_to_oracle(danger_type, frame, source_key):
+    finally:
+        _enqueue_detection_discord_alert(notification, image_path, active_drone_id, source_key)
+
+
+def _send_danger_log_to_oracle(danger_type, frame, source_key, notification=None):
     """
     [트랙 B: 위험 이상객체 실시간 원격 적재 엔진]
     YOLO가 포착한 진짜 이상객체 영문 레이블 정보를 자바 수신 컨트롤러로 하이패스 송출합니다.
@@ -136,6 +183,7 @@ def _send_danger_log_to_oracle(danger_type, frame, source_key):
 
     # 🌟 인서트 가동 직전 물리 캡처 실행 및 파일명 추출
     saved_file_name = _save_physical_snapshot(frame, "dangerlog")
+    image_path = _local_snapshot_path("dangerlog", saved_file_name)
 
     active_drone_id = get_active_drone_id(source_key)
     drone_id = active_drone_id
@@ -170,6 +218,10 @@ def _send_danger_log_to_oracle(danger_type, frame, source_key):
 
 
 # 기존에 더미로 남아있던 코드 맵 호출 함수 호환성 유지용 마감
+    finally:
+        _enqueue_detection_discord_alert(notification, image_path, drone_id, source_key)
+
+
 def _report_worker():
     """Run blocking snapshot and Spring HTTP work outside the YOLO loop."""
     while True:
@@ -194,7 +246,7 @@ def _enqueue_report(report_type, payload):
         return False
 
 
-def send_log_to_oracle(animal_type, detect_count, reason, frame, source_key=None):
+def send_log_to_oracle(animal_type, detect_count, reason, frame, source_key=None, notification=None):
     """Schedule a normal event without blocking the detection thread."""
     return _enqueue_report("normal", {
         "animal_type": animal_type,
@@ -202,15 +254,17 @@ def send_log_to_oracle(animal_type, detect_count, reason, frame, source_key=None
         "reason": reason,
         "frame": frame.copy() if frame is not None else None,
         "source_key": source_key or CURRENT_ACTIVE_SOURCE,
+        "notification": dict(notification) if notification else None,
     })
 
 
-def send_danger_log_to_oracle(danger_type, frame, source_key=None, drone_id=None):
+def send_danger_log_to_oracle(danger_type, frame, source_key=None, drone_id=None, notification=None):
     """Schedule a danger event without blocking the detection thread."""
     return _enqueue_report("danger", {
         "danger_type": danger_type,
         "frame": frame.copy() if frame is not None else None,
         "source_key": source_key or drone_id or CURRENT_ACTIVE_SOURCE,
+        "notification": dict(notification) if notification else None,
     })
 
 

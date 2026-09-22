@@ -18,6 +18,7 @@ COLLISION_DANGER_CM = 10.0
 
 _sensor_lock = threading.Lock()
 _sensor_thread = None
+_sensor_shutdown_event = threading.Event()
 _latest_status = {
     "temperature": 0,
     "humidity": 0,
@@ -68,8 +69,8 @@ def _parse_sensor_output(output):
 
 def _read_from_esp32():
     command = (
-        'mpremote connect COM6 resume exec "import main, ujson; '
-        'print(ujson.dumps(main.read_sensor_status()))"'
+        "connect", "COM6", "resume", "exec",
+        "import main, ujson; print(ujson.dumps(main.read_sensor_status()))",
     )
     completed = buzzer_helper.run_mpremote(command, timeout=5, capture_output=True)
     payload = _parse_sensor_output(completed.stdout)
@@ -121,9 +122,9 @@ def _update_status():
 
 
 def _sensor_worker():
-    while True:
+    while not _sensor_shutdown_event.is_set():
         _update_status()
-        time.sleep(SENSOR_POLL_SECONDS)
+        _sensor_shutdown_event.wait(SENSOR_POLL_SECONDS)
 
 
 def start_sensor_service():
@@ -132,6 +133,7 @@ def start_sensor_service():
     with _sensor_lock:
         if _sensor_thread is not None and _sensor_thread.is_alive():
             return False
+        _sensor_shutdown_event.clear()
         _sensor_thread = threading.Thread(
             target=_sensor_worker,
             name="esp32-sensor-worker",
@@ -140,6 +142,21 @@ def start_sensor_service():
         _sensor_thread.start()
         print("[sensor] service worker started")
         return True
+
+
+def stop_sensor_service(join_timeout=2.0):
+    """Stop cached polling; an in-flight mpremote command keeps its timeout."""
+    global _sensor_thread
+    _sensor_shutdown_event.set()
+    thread = _sensor_thread
+    if thread is not None and thread is not threading.current_thread():
+        thread.join(join_timeout)
+    if thread is None or not thread.is_alive():
+        _sensor_thread = None
+        print("[sensor] service worker stopped")
+        return True
+    print("[sensor] service worker did not stop before timeout")
+    return False
 
 
 def get_latest_sensor_status():

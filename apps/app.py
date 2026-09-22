@@ -1,4 +1,5 @@
 import logging  # 🛠️ 로그 필터링을 위해 logging 라이브러리 추가
+import atexit
 import threading
 from pathlib import Path
 from flask import Flask
@@ -26,6 +27,18 @@ csrf = CSRFProtect()
 login_manager = LoginManager()
 login_manager.login_view = "employee.signup"
 login_manager.login_message = ""
+
+
+def _shutdown_optional_services():
+    """Stop non-detector background workers without preventing process exit."""
+    try:
+        from apps.services.starter import stop_services
+        stop_services()
+    except Exception as error:
+        print(f"[shutdown] background service stop failed: {error}")
+
+
+atexit.register(_shutdown_optional_services)
 
 def create_app(config_key):
     app = Flask(__name__)

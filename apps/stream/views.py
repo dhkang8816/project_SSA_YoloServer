@@ -2,7 +2,7 @@ import time
 
 import cv2
 import numpy as np
-from flask import Blueprint, Response, jsonify, render_template, request
+from flask import Blueprint, Response, jsonify, render_template, request, stream_with_context
 
 from apps.app import csrf
 from apps.services import buzzer_helper, sensor_helper, yolo_detector
@@ -39,7 +39,7 @@ def _video_response(source_key):
     # merely because an old MJPEG connection still exists would immediately
     # undo a user's "탐지 중지" action.
     return Response(
-        generate_frames(source_key),
+        stream_with_context(generate_frames(source_key)),
         mimetype="multipart/x-mixed-replace; boundary=frame",
     )
 
@@ -48,6 +48,7 @@ def generate_frames(source_key=None):
     """Encode only the requested source's latest completed YOLO frame."""
     source_key = source_key or yolo_detector.get_default_source_key()
     yolo_detector.stream_client_opened()
+    print(f"[Stream {source_key}] client connected")
     try:
         while True:
             worker_status = yolo_detector.get_source_status().get(source_key, {})
@@ -67,8 +68,12 @@ def generate_frames(source_key=None):
                     + b"\r\n"
                 )
             time.sleep(0.03)
+    except (GeneratorExit, BrokenPipeError, ConnectionResetError):
+        # A browser/Spring proxy disconnect only ends this HTTP generator.
+        pass
     finally:
         yolo_detector.stream_client_closed()
+        print(f"[Stream {source_key}] client disconnected")
 
 
 def _waiting_frame(source_key):

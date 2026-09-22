@@ -9,7 +9,7 @@ import time
 
 import cv2
 import numpy as np
-from flask import Blueprint, Response, jsonify, render_template
+from flask import Blueprint, Response, jsonify, render_template, stream_with_context
 
 from apps.services import oracle_service, yolo_detector
 
@@ -79,36 +79,43 @@ def generate_esp32_frames_bridge():
     """Serve the ESP32 worker's annotated latest frame to legacy consumers."""
     global esp32_current_frame, esp32_boxes
     start_esp32_receiver()
-    while True:
-        frame = yolo_detector.get_latest_frame("esp32")
-        esp32_boxes = yolo_detector.get_latest_boxes("esp32")
-        if frame is None:
-            frame = np.zeros((480, 640, 3), dtype=np.uint8)
-            cv2.putText(
-                frame,
-                "CONNECTING TO ESP32 CAM...",
-                (120, 240),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
-                (0, 255, 0),
-                2,
-            )
-        else:
-            esp32_current_frame = frame
-        encoded, buffer = cv2.imencode(".jpg", frame)
-        if encoded:
-            yield (
-                b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
-                + buffer.tobytes()
-                + b"\r\n"
-            )
-        time.sleep(0.04)
+    print("[Stream esp32] legacy client connected")
+    try:
+        while True:
+            frame = yolo_detector.get_latest_frame("esp32")
+            esp32_boxes = yolo_detector.get_latest_boxes("esp32")
+            if frame is None:
+                frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(
+                    frame,
+                    "CONNECTING TO ESP32 CAM...",
+                    (120, 240),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8,
+                    (0, 255, 0),
+                    2,
+                )
+            else:
+                esp32_current_frame = frame
+            encoded, buffer = cv2.imencode(".jpg", frame)
+            if encoded:
+                yield (
+                    b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
+                    + buffer.tobytes()
+                    + b"\r\n"
+                )
+            time.sleep(0.04)
+    except (GeneratorExit, BrokenPipeError, ConnectionResetError):
+        pass
+    finally:
+        # This is a legacy HTTP consumer only; it does not own the capture.
+        print("[Stream esp32] legacy client disconnected")
 
 
 @esp32_yolov12.route("/video_feed")
 def video_feed():
     return Response(
-        generate_esp32_frames_bridge(),
+        stream_with_context(generate_esp32_frames_bridge()),
         mimetype="multipart/x-mixed-replace; boundary=frame",
     )
 

@@ -1,62 +1,156 @@
+"""Asynchronous Discord webhook notifications for completed YOLO events."""
+
+import json
+import mimetypes
 import os
-import smtplib
-from email.mime.text import MIMEText
+import threading
+from queue import Empty, Full, Queue
+
 import requests
 from dotenv import load_dotenv
 
+
 load_dotenv()
 
-def send_discord_webhook(message):
-    """디스코드 채널로 실시간 AI 감지 경보를 전송합니다."""
-    webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
-    if not webhook_url: 
-        return
-    data = {"content": f"🚨 [보호센터 알람]: {message}", "username": "보호센터 AI 감지기"}
-    try:
-        requests.post(webhook_url, json=data, timeout=3.0)
-    except Exception as e:
-        print(f"❌ 디스코드 발송 오류: {e}")
+_notification_queue = Queue(maxsize=100)
+_notification_start_lock = threading.Lock()
+_notification_worker = None
+_notification_shutdown_event = threading.Event()
 
-def send_alert_email(subject, body_text, receiver_emails):
+
+def _webhook_url():
+    """Return the configured URL without ever including it in log output."""
+    return os.getenv("DISCORD_WEBHOOK_URL", "").strip()
+
+
+def _send_text_payload(webhook_url, payload):
+    response = requests.post(webhook_url, json=payload, timeout=(3.0, 5.0))
+    response.raise_for_status()
+
+
+def send_discord_webhook(message, image_path=None):
+    """Send one Discord message, optionally attaching an existing local snapshot.
+
+    The function remains synchronous for backward compatibility. Production YOLO
+    events must use :func:`enqueue_discord_alert`, which is consumed by the
+    single notification worker below.
     """
-    [기존 13~14페이지 복원] 
-    Gmail SMTP SSL(포트 465) 보안 채널을 사용하여 관리자(들)에게 원격 알림 메일을 발송합니다.
-    """
-    # 🔐 실무 보안 설정: .env 파일에서 계정 정보를 안전하게 로드합니다.
-    smtp_server = "://gmail.com"
-    smtp_port = 465
-    sender_email = os.getenv("SMTP_SENDER_EMAIL")     # 예: dhkang8817@gmail.com
-    sender_password = os.getenv("SMTP_SENDER_PASSWORD") # 예: pqzuqioaxemrsuml (구글 앱비밀번호 16자리)
+    webhook_url = _webhook_url()
+    if not webhook_url:
+        print("[discord] DISCORD_WEBHOOK_URL is not configured; notification skipped")
+        return False
 
-    # 환경변수 누락 시 시스템 다운 방지용 방어선
-    if not sender_email or not sender_password:
-        print("⚠️ [이메일 서비스 경고] .env 파일에 이메일 계정 정보(SMTP_SENDER_...)가 세팅되지 않았습니다.")
-        return
+    payload = {
+        "content": str(message),
+        "username": "Animal Protection AI",
+    }
 
-    if not receiver_emails:
-        print("⚠️ [이메일 서비스 경고] 수신자 이메일 리스트가 비어 있어 발송을 취소합니다.")
-        return
+    if not image_path or not os.path.isfile(image_path):
+        if image_path:
+            print("[discord] snapshot is unavailable; sending text-only notification")
+        try:
+            _send_text_payload(webhook_url, payload)
+            print("[discord] notification sent")
+            return True
+        except requests.RequestException as error:
+            print(f"[discord] notification failed: {error}")
+            return False
 
     try:
-        # 이메일 메시지 객체 생성 (UTF-8 인코딩)
-        msg = MIMEText(body_text, _charset="utf-8")
-        msg['Subject'] = subject
-        msg['From'] = sender_email
-        
-        # 수신자가 여러 명(리스트)일 경우를 대비해 콤마로 결합 처리
-        if isinstance(receiver_emails, list):
-            msg['To'] = ", ".join(receiver_emails)
-            to_list = receiver_emails
-        else:
-            msg['To'] = receiver_emails
-            to_list = [receiver_emails]
+        mime_type = mimetypes.guess_type(image_path)[0] or "application/octet-stream"
+        with open(image_path, "rb") as image_file:
+            files = {
+                "files[0]": (
+                    os.path.basename(image_path),
+                    image_file,
+                    mime_type,
+                )
+            }
+            response = requests.post(
+                webhook_url,
+                data={"payload_json": json.dumps(payload, ensure_ascii=False)},
+                files=files,
+                timeout=(3.0, 5.0),
+            )
+            response.raise_for_status()
+        print("[discord] notification with snapshot sent")
+        return True
+    except (OSError, requests.RequestException) as error:
+        # A file/read error must not discard the event's text notification.
+        print(f"[discord] snapshot upload failed; sending text-only notification: {error}")
+        try:
+            _send_text_payload(webhook_url, payload)
+            print("[discord] text-only fallback sent")
+            return True
+        except requests.RequestException as fallback_error:
+            print(f"[discord] notification failed: {fallback_error}")
+            return False
 
-        # Gmail SMTP SSL 보안 서버 접속 및 로그인 발송 규칙 준수
-        server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=5.0)
-        server.login(sender_email, sender_password)
-        server.sendmail(sender_email, to_list, msg.as_string())
-        server.quit()
-        
-        print(f"📧 [이메일 발송 성공] 관리자({msg['To']})에게 알림 메일을 전송했습니다.")
-    except Exception as e:
-        print(f"❌ [이메일 발송 실패] SMTP 메일 발송 중 오류 발생: {e}")
+
+def send_discord_alert(message, image_path=None):
+    """Clear semantic alias for callers that send a detection alert."""
+    return send_discord_webhook(message, image_path=image_path)
+
+
+def enqueue_discord_alert(message, image_path=None, event_type=None, drone_id=None, channel=None):
+    """Queue a completed event without blocking a YOLO or Spring-report worker."""
+    event = {
+        "message": str(message),
+        "image_path": image_path,
+        "event_type": event_type,
+        "drone_id": drone_id,
+        "channel": channel,
+    }
+    try:
+        _notification_queue.put_nowait(event)
+        return True
+    except Full:
+        print("[discord] notification queue is full; event skipped")
+        return False
+
+
+def _notification_loop():
+    while not _notification_shutdown_event.is_set():
+        try:
+            event = _notification_queue.get(timeout=0.5)
+        except Empty:
+            continue
+        try:
+            send_discord_alert(event["message"], image_path=event.get("image_path"))
+        except Exception as error:
+            # Discord is optional: worker failures must never stop detection.
+            print(f"[discord] notification worker error: {error}")
+        finally:
+            _notification_queue.task_done()
+
+
+def start_notification_service():
+    """Start exactly one daemon worker, including under the Flask reloader."""
+    global _notification_worker
+    with _notification_start_lock:
+        if _notification_worker is not None and _notification_worker.is_alive():
+            return False
+        _notification_shutdown_event.clear()
+        _notification_worker = threading.Thread(
+            target=_notification_loop,
+            name="discord-notification-worker",
+            daemon=True,
+        )
+        _notification_worker.start()
+        print("[discord] notification worker started")
+        return True
+
+
+def stop_notification_service(join_timeout=2.0):
+    """Stop the optional notification worker without blocking Flask exit."""
+    global _notification_worker
+    _notification_shutdown_event.set()
+    thread = _notification_worker
+    if thread is not None and thread is not threading.current_thread():
+        thread.join(join_timeout)
+    if thread is None or not thread.is_alive():
+        _notification_worker = None
+        print("[discord] notification worker stopped")
+        return True
+    print("[discord] notification worker did not stop before timeout")
+    return False

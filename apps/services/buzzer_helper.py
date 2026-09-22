@@ -7,20 +7,23 @@ threads never open the COM port concurrently.
 
 import queue
 import subprocess
+import sys
 import threading
 
 
 _buzzer_queue = queue.Queue()
 _worker_lock = threading.Lock()
 _worker_thread = None
+_shutdown_event = threading.Event()
 _state_lock = threading.Lock()
 _buzzer_enabled = True
 _collision_level = "SAFE"
 _mpremote_lock = threading.Lock()
 
+_MPREMOTE_PREFIX = (sys.executable, "-m", "mpremote")
 _COMMANDS = {
-    "animal": 'mpremote connect COM6 resume exec "import main; main.play_animal_alert()"',
-    "danger": 'mpremote connect COM6 resume exec "import main; main.play_danger_alert()"',
+    "animal": ("connect", "COM6", "resume", "exec", "import main; main.play_animal_alert()"),
+    "danger": ("connect", "COM6", "resume", "exec", "import main; main.play_danger_alert()"),
 }
 _ERROR_MESSAGES = {
     "animal": "animal buzzer command failed",
@@ -28,12 +31,13 @@ _ERROR_MESSAGES = {
 }
 
 
-def run_mpremote(command, timeout=15, capture_output=False):
-    """Serialize every USB/COM command issued by this Python process."""
+def run_mpremote(arguments, timeout=15, capture_output=False):
+    """Run this interpreter's mpremote module without relying on PATH."""
+    command = [*_MPREMOTE_PREFIX, *arguments]
     with _mpremote_lock:
         return subprocess.run(
             command,
-            shell=True,
+            shell=False,
             check=True,
             timeout=timeout,
             capture_output=capture_output,
@@ -47,8 +51,8 @@ def _run_mpremote_command(alert_type):
         if alert_type.startswith("collision:"):
             level = alert_type.split(":", 1)[1]
             command = (
-                'mpremote connect COM6 resume exec "import main; '
-                f'main.play_collision_alert(\'{level}\')"'
+                "connect", "COM6", "resume", "exec",
+                f"import main; main.play_collision_alert('{level}')",
             )
         else:
             command = _COMMANDS[alert_type]
@@ -63,8 +67,11 @@ def _run_mpremote_command(alert_type):
 
 def _buzzer_worker():
     """Consume commands one at a time to protect the shared USB COM port."""
-    while True:
-        alert_type = _buzzer_queue.get()
+    while not _shutdown_event.is_set():
+        try:
+            alert_type = _buzzer_queue.get(timeout=0.5)
+        except queue.Empty:
+            continue
         try:
             # Recheck immediately before USB access so an OFF change also
             # suppresses alerts that were already waiting in the queue.
@@ -80,6 +87,7 @@ def start_buzzer_service():
     with _worker_lock:
         if _worker_thread is not None and _worker_thread.is_alive():
             return False
+        _shutdown_event.clear()
         _worker_thread = threading.Thread(
             target=_buzzer_worker,
             name="esp32-buzzer-worker",
@@ -88,6 +96,21 @@ def start_buzzer_service():
         _worker_thread.start()
         print("[buzzer] service worker started")
         return True
+
+
+def stop_buzzer_service(join_timeout=2.0):
+    """Request clean shutdown without waiting indefinitely for USB I/O."""
+    global _worker_thread
+    _shutdown_event.set()
+    thread = _worker_thread
+    if thread is not None and thread is not threading.current_thread():
+        thread.join(join_timeout)
+    if thread is None or not thread.is_alive():
+        _worker_thread = None
+        print("[buzzer] service worker stopped")
+        return True
+    print("[buzzer] service worker did not stop before timeout")
+    return False
 
 
 def _enqueue(alert_type):
